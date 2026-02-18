@@ -39,6 +39,12 @@ export function parseApiError(error) {
 export const commonApi = {
   health: () => rootRequest({ method: "GET", url: "/health" }),
   schedulerStatus: () => request({ method: "GET", url: "/scheduler/status" }),
+  taskTemplates: (userType = "") =>
+    request({
+      method: "GET",
+      url: "/task-templates",
+      params: userType ? { user_type: userType } : {},
+    }),
 };
 
 export const superApi = {
@@ -81,6 +87,12 @@ export const managerApi = {
       data: payload,
       headers: withBearer(token),
     }),
+  overview: (token) =>
+    request({
+      method: "GET",
+      url: "/manager/overview",
+      headers: withBearer(token),
+    }),
   createActivationCode: (token, payload) =>
     request({
       method: "POST",
@@ -92,6 +104,26 @@ export const managerApi = {
     request({
       method: "POST",
       url: "/manager/users/quick-create",
+      data: payload,
+      headers: withBearer(token),
+    }),
+  patchUserLifecycle: (token, userId, payload) =>
+    request({
+      method: "PATCH",
+      url: `/manager/users/${userId}/lifecycle`,
+      data: payload,
+      headers: withBearer(token),
+    }),
+  getUserAssets: (token, userId) =>
+    request({
+      method: "GET",
+      url: `/manager/users/${userId}/assets`,
+      headers: withBearer(token),
+    }),
+  putUserAssets: (token, userId, payload) =>
+    request({
+      method: "PUT",
+      url: `/manager/users/${userId}/assets`,
       data: payload,
       headers: withBearer(token),
     }),
@@ -128,6 +160,25 @@ export const userApi = {
     request({ method: "POST", url: "/user/auth/register-by-code", data: payload }),
   login: (payload) =>
     request({ method: "POST", url: "/user/auth/login", data: payload }),
+  logout: (token, payload = { all: false }) =>
+    request({
+      method: "POST",
+      url: "/user/auth/logout",
+      data: payload,
+      headers: withBearer(token),
+    }),
+  getMeProfile: (token) =>
+    request({
+      method: "GET",
+      url: "/user/me/profile",
+      headers: withBearer(token),
+    }),
+  getMeAssets: (token) =>
+    request({
+      method: "GET",
+      url: "/user/me/assets",
+      headers: withBearer(token),
+    }),
   redeemCode: (token, payload) =>
     request({
       method: "POST",

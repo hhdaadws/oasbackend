@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	ctxActorRoleKey = "actor_role"
-	ctxActorIDKey   = "actor_id"
-	ctxManagerIDKey = "manager_id"
-	ctxUserIDKey    = "user_id"
+	ctxActorRoleKey   = "actor_role"
+	ctxActorIDKey     = "actor_id"
+	ctxManagerIDKey   = "manager_id"
+	ctxUserIDKey      = "user_id"
+	ctxUserTokenIDKey = "user_token_id"
 )
 
 func (s *Server) requireJWT(roles ...string) gin.HandlerFunc {
@@ -103,6 +104,7 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 		c.Set(ctxActorRoleKey, models.ActorTypeUser)
 		c.Set(ctxActorIDKey, user.ID)
 		c.Set(ctxUserIDKey, user.ID)
+		c.Set(ctxUserTokenIDKey, token.ID)
 		c.Set(ctxManagerIDKey, user.ManagerID)
 		c.Next()
 	}

@@ -15,7 +15,7 @@ import (
 	"oas-cloud-go/internal/config"
 	"oas-cloud-go/internal/models"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -237,4 +237,13 @@ func extractTokenFromBody(t *testing.T, raw []byte) string {
 	}
 	token, _ := payload["token"].(string)
 	return token
+}
+
+func decodeBodyMap(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	payload := map[string]any{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+	return payload
 }

@@ -15,6 +15,7 @@ func TestRegisterByCodeConcurrentOnlyOneSuccess(t *testing.T) {
 	manager := createActiveManager(t, db, "manager_concurrent", "passwordConcurrent123")
 	code := models.UserActivationCode{
 		ManagerID:    manager.ID,
+		UserType:     models.UserTypeDaily,
 		Code:         "uac_concurrent_once",
 		DurationDays: 30,
 		Status:       models.CodeStatusUnused,

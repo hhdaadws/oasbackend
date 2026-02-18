@@ -18,6 +18,7 @@ import (
 	"oas-cloud-go/internal/config"
 	"oas-cloud-go/internal/models"
 	"oas-cloud-go/internal/scheduler"
+	"oas-cloud-go/internal/taskmeta"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
@@ -36,6 +37,8 @@ type Server struct {
 	tokenManager *auth.TokenManager
 	router       *gin.Engine
 }
+
+var errInvalidTaskConfigPatch = errors.New("invalid task config patch")
 
 func New(cfg config.Config, db *gorm.DB, redisStore cache.Store) *Server {
 	app := &Server{
@@ -75,6 +78,7 @@ func (s *Server) mountRoutes() {
 	{
 		api.GET("/bootstrap/status", s.bootstrapStatus)
 		api.GET("/scheduler/status", s.schedulerStatus)
+		api.GET("/task-templates", s.taskTemplates)
 		api.POST("/bootstrap/init", s.bootstrapInit)
 		api.POST("/super/auth/login", s.superLogin)
 		api.POST("/manager/auth/register", s.managerRegister)
@@ -96,9 +100,13 @@ func (s *Server) mountRoutes() {
 	managerGroup.Use(s.requireJWT(models.ActorTypeManager))
 	{
 		managerGroup.POST("/auth/redeem-renewal-key", s.managerRedeemRenewalKey)
+		managerGroup.GET("/overview", s.managerOverview)
 		managerGroup.POST("/activation-codes", s.managerCreateActivationCode)
 		managerGroup.POST("/users/quick-create", s.managerQuickCreateUser)
 		managerGroup.GET("/users", s.managerListUsers)
+		managerGroup.PATCH("/users/:user_id/lifecycle", s.managerPatchUserLifecycle)
+		managerGroup.GET("/users/:user_id/assets", s.managerGetUserAssets)
+		managerGroup.PUT("/users/:user_id/assets", s.managerPutUserAssets)
 		managerGroup.GET("/users/:user_id/tasks", s.managerGetUserTasks)
 		managerGroup.PUT("/users/:user_id/tasks", s.managerPutUserTasks)
 		managerGroup.GET("/users/:user_id/logs", s.managerGetUserLogs)
@@ -107,7 +115,10 @@ func (s *Server) mountRoutes() {
 	userGroup := api.Group("/user")
 	userGroup.Use(s.requireUserToken())
 	{
+		userGroup.POST("/auth/logout", s.userLogout)
 		userGroup.POST("/auth/redeem-code", s.userRedeemCode)
+		userGroup.GET("/me/profile", s.userGetMeProfile)
+		userGroup.GET("/me/assets", s.userGetMeAssets)
 		userGroup.GET("/me/tasks", s.userGetMeTasks)
 		userGroup.PUT("/me/tasks", s.userPutMeTasks)
 		userGroup.GET("/me/logs", s.userGetMeLogs)
@@ -138,6 +149,23 @@ func (s *Server) schedulerStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"enabled": true,
 		"status":  snapshot,
+	})
+}
+
+func (s *Server) taskTemplates(c *gin.Context) {
+	rawType := strings.TrimSpace(c.Query("user_type"))
+	if rawType != "" && !models.IsValidUserType(rawType) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid user_type"})
+		return
+	}
+	userType := models.NormalizeUserType(rawType)
+	c.JSON(http.StatusOK, gin.H{
+		"user_type":            userType,
+		"supported_user_types": taskmeta.UserTypes(),
+		"task_pools":           taskmeta.TaskPools(),
+		"order":                taskmeta.UserTypeTaskOrder(userType),
+		"default_config":       taskmeta.BuildDefaultTaskConfigByType(userType),
+		"items":                taskmeta.BuildTaskTemplateListByType(userType),
 	})
 }
 
@@ -428,6 +456,7 @@ func (s *Server) managerCreateActivationCode(c *gin.Context) {
 		return
 	}
 	managerID := getUint(c, ctxActorIDKey)
+	userType := models.NormalizeUserType(req.UserType)
 	code, err := auth.GenerateOpaqueToken("uac", 12)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to generate activation code"})
@@ -436,6 +465,7 @@ func (s *Server) managerCreateActivationCode(c *gin.Context) {
 	now := time.Now().UTC()
 	activation := models.UserActivationCode{
 		ManagerID:    managerID,
+		UserType:     userType,
 		Code:         code,
 		DurationDays: req.DurationDays,
 		Status:       models.CodeStatusUnused,
@@ -445,8 +475,15 @@ func (s *Server) managerCreateActivationCode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to create activation code"})
 		return
 	}
-	s.audit(models.ActorTypeManager, managerID, "create_activation_code", "user_activation_code", activation.ID, datatypes.JSONMap{"duration_days": req.DurationDays}, c.ClientIP())
-	c.JSON(http.StatusCreated, gin.H{"code": activation.Code, "duration_days": activation.DurationDays})
+	s.audit(models.ActorTypeManager, managerID, "create_activation_code", "user_activation_code", activation.ID, datatypes.JSONMap{
+		"duration_days": req.DurationDays,
+		"user_type":     activation.UserType,
+	}, c.ClientIP())
+	c.JSON(http.StatusCreated, gin.H{
+		"code":          activation.Code,
+		"duration_days": activation.DurationDays,
+		"user_type":     activation.UserType,
+	})
 }
 
 func (s *Server) managerQuickCreateUser(c *gin.Context) {
@@ -456,6 +493,7 @@ func (s *Server) managerQuickCreateUser(c *gin.Context) {
 		return
 	}
 	managerID := getUint(c, ctxActorIDKey)
+	userType := models.NormalizeUserType(req.UserType)
 	now := time.Now().UTC()
 
 	var createdUser models.User
@@ -466,6 +504,7 @@ func (s *Server) managerQuickCreateUser(c *gin.Context) {
 		}
 		activation := models.UserActivationCode{
 			ManagerID:    managerID,
+			UserType:     userType,
 			Code:         code,
 			DurationDays: req.DurationDays,
 			Status:       models.CodeStatusUnused,
@@ -485,8 +524,16 @@ func (s *Server) managerQuickCreateUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to quick create user"})
 		return
 	}
-	s.audit(models.ActorTypeManager, managerID, "quick_create_user", "user", createdUser.ID, datatypes.JSONMap{"duration_days": req.DurationDays}, c.ClientIP())
-	c.JSON(http.StatusCreated, gin.H{"account_no": createdUser.AccountNo, "user_id": createdUser.ID, "expires_at": createdUser.ExpiresAt})
+	s.audit(models.ActorTypeManager, managerID, "quick_create_user", "user", createdUser.ID, datatypes.JSONMap{
+		"duration_days": req.DurationDays,
+		"user_type":     createdUser.UserType,
+	}, c.ClientIP())
+	c.JSON(http.StatusCreated, gin.H{
+		"account_no": createdUser.AccountNo,
+		"user_id":    createdUser.ID,
+		"user_type":  models.NormalizeUserType(createdUser.UserType),
+		"expires_at": createdUser.ExpiresAt,
+	})
 }
 
 func (s *Server) managerListUsers(c *gin.Context) {
@@ -496,7 +543,69 @@ func (s *Server) managerListUsers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query users"})
 		return
 	}
+	for index := range users {
+		users[index].UserType = models.NormalizeUserType(users[index].UserType)
+	}
 	c.JSON(http.StatusOK, gin.H{"items": users})
+}
+
+func (s *Server) managerOverview(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	now := time.Now().UTC()
+
+	userStats := gin.H{
+		"total":    int64(0),
+		"active":   int64(0),
+		"expired":  int64(0),
+		"disabled": int64(0),
+	}
+	jobStats := gin.H{
+		"pending": int64(0),
+		"leased":  int64(0),
+		"running": int64(0),
+		"success": int64(0),
+		"failed":  int64(0),
+	}
+
+	userStatusTargets := []string{models.UserStatusActive, models.UserStatusExpired, models.UserStatusDisabled}
+	var totalUsers int64
+	for _, status := range userStatusTargets {
+		var count int64
+		if err := s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, status).Count(&count).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query user overview"})
+			return
+		}
+		userStats[status] = count
+		totalUsers += count
+	}
+	userStats["total"] = totalUsers
+
+	jobStatusTargets := []string{models.JobStatusPending, models.JobStatusLeased, models.JobStatusRunning, models.JobStatusSuccess, models.JobStatusFailed}
+	for _, status := range jobStatusTargets {
+		var count int64
+		if err := s.db.Model(&models.TaskJob{}).Where("manager_id = ? AND status = ?", managerID, status).Count(&count).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query job overview"})
+			return
+		}
+		jobStats[status] = count
+	}
+
+	var recentFailures int64
+	since := now.Add(-24 * time.Hour)
+	if err := s.db.Model(&models.TaskJobEvent{}).
+		Joins("JOIN task_jobs ON task_jobs.id = task_job_events.job_id").
+		Where("task_jobs.manager_id = ? AND task_job_events.event_type = ? AND task_job_events.event_at >= ?", managerID, "fail", since).
+		Count(&recentFailures).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query recent failures"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user_stats":          userStats,
+		"job_stats":           jobStats,
+		"recent_failures_24h": recentFailures,
+		"generated_at":        now,
+	})
 }
 
 func (s *Server) managerGetUserTasks(c *gin.Context) {
@@ -508,12 +617,161 @@ func (s *Server) managerGetUserTasks(c *gin.Context) {
 	if !s.managerOwnsUser(c, managerID, userID) {
 		return
 	}
+	var user models.User
+	if err := s.db.Where("id = ? AND manager_id = ?", userID, managerID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		return
+	}
 	config, err := s.getOrCreateTaskConfig(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to load task config"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user_id": userID, "task_config": config.TaskConfig, "version": config.Version})
+	c.JSON(http.StatusOK, gin.H{
+		"user_id":     userID,
+		"user_type":   models.NormalizeUserType(user.UserType),
+		"task_config": config.TaskConfig,
+		"version":     config.Version,
+	})
+}
+
+func (s *Server) managerPatchUserLifecycle(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	userID, ok := parseUintParam(c, "user_id")
+	if !ok {
+		return
+	}
+	if !s.managerOwnsUser(c, managerID, userID) {
+		return
+	}
+
+	var req managerPatchUserLifecycleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least one field must be provided"})
+		return
+	}
+
+	now := time.Now().UTC()
+	var user models.User
+	if err := s.db.Where("id = ? AND manager_id = ?", userID, managerID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		return
+	}
+
+	updates := map[string]any{"updated_at": now}
+	hasExpiryUpdate := false
+	if strings.TrimSpace(req.ExpiresAt) != "" {
+		parsed, err := parseFlexibleDateTime(req.ExpiresAt)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid expires_at format"})
+			return
+		}
+		updates["expires_at"] = parsed
+		hasExpiryUpdate = true
+	}
+	if req.ExtendDays != 0 {
+		if req.ExtendDays < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "extend_days must be positive"})
+			return
+		}
+		newExpire := extendExpiry(user.ExpiresAt, req.ExtendDays, now)
+		updates["expires_at"] = newExpire
+		hasExpiryUpdate = true
+	}
+
+	if status := strings.TrimSpace(req.Status); status != "" {
+		if status != models.UserStatusActive && status != models.UserStatusExpired && status != models.UserStatusDisabled {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+			return
+		}
+		updates["status"] = status
+	} else if hasExpiryUpdate {
+		expireValue, has := updates["expires_at"]
+		if has {
+			if expireTime, ok := expireValue.(time.Time); ok {
+				if expireTime.After(now) {
+					updates["status"] = models.UserStatusActive
+				} else {
+					updates["status"] = models.UserStatusExpired
+				}
+			}
+		}
+	}
+
+	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update user lifecycle"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "patch_user_lifecycle", "user", userID, datatypes.JSONMap{
+		"expires_at":  req.ExpiresAt,
+		"extend_days": req.ExtendDays,
+		"status":      req.Status,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "user lifecycle updated"})
+}
+
+func (s *Server) managerGetUserAssets(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	userID, ok := parseUintParam(c, "user_id")
+	if !ok {
+		return
+	}
+	if !s.managerOwnsUser(c, managerID, userID) {
+		return
+	}
+
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		return
+	}
+	assets := deepMergeMap(taskmeta.BuildDefaultUserAssets(), map[string]any(user.Assets))
+	c.JSON(http.StatusOK, gin.H{
+		"user_id":    userID,
+		"user_type":  models.NormalizeUserType(user.UserType),
+		"assets":     assets,
+		"expires_at": user.ExpiresAt,
+		"status":     user.Status,
+	})
+}
+
+func (s *Server) managerPutUserAssets(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	userID, ok := parseUintParam(c, "user_id")
+	if !ok {
+		return
+	}
+	if !s.managerOwnsUser(c, managerID, userID) {
+		return
+	}
+	var req putUserAssetsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	base := taskmeta.BuildDefaultUserAssets()
+	for key, value := range req.Assets {
+		if err := taskmeta.ValidateAssetKey(key); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+		base[key] = taskmeta.ParseAssetInt(value, taskmeta.ParseAssetInt(base[key], 0))
+	}
+
+	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]any{
+		"assets":     datatypes.JSONMap(base),
+		"updated_at": time.Now().UTC(),
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update user assets"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "update_user_assets", "user", userID, datatypes.JSONMap{"assets": req.Assets}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "user assets updated", "assets": base})
 }
 
 func (s *Server) managerPutUserTasks(c *gin.Context) {
@@ -532,10 +790,24 @@ func (s *Server) managerPutUserTasks(c *gin.Context) {
 	}
 	updated, err := s.mergeTaskConfig(userID, req.TaskConfig)
 	if err != nil {
+		if errors.Is(err, errInvalidTaskConfigPatch) {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "task_config contains tasks not allowed for this user type"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update task config"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user_id": userID, "task_config": updated.TaskConfig, "version": updated.Version})
+	var user models.User
+	if err := s.db.Where("id = ? AND manager_id = ?", userID, managerID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"user_id":     userID,
+		"user_type":   models.NormalizeUserType(user.UserType),
+		"task_config": updated.TaskConfig,
+		"version":     updated.Version,
+	})
 }
 
 func (s *Server) managerGetUserLogs(c *gin.Context) {
@@ -595,6 +867,7 @@ func (s *Server) userRegisterByCode(c *gin.Context) {
 	}
 	c.JSON(http.StatusCreated, gin.H{
 		"account_no": createdUser.AccountNo,
+		"user_type":  models.NormalizeUserType(createdUser.UserType),
 		"token":      rawToken,
 		"expires_at": createdUser.ExpiresAt,
 		"token_exp":  tokenExpire,
@@ -626,7 +899,12 @@ func (s *Server) userLogin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to issue user token"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"token": rawToken, "account_no": user.AccountNo, "token_exp": tokenExpire})
+	c.JSON(http.StatusOK, gin.H{
+		"token":      rawToken,
+		"account_no": user.AccountNo,
+		"user_type":  models.NormalizeUserType(user.UserType),
+		"token_exp":  tokenExpire,
+	})
 }
 
 func (s *Server) userRedeemCode(c *gin.Context) {
@@ -655,11 +933,16 @@ func (s *Server) userRedeemCode(c *gin.Context) {
 			return err
 		}
 		newExpire := extendExpiry(user.ExpiresAt, code.DurationDays, now)
+		nextUserType := models.NormalizeUserType(code.UserType)
 		if err := tx.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]any{
 			"expires_at": newExpire,
+			"user_type":  nextUserType,
 			"status":     models.UserStatusActive,
 			"updated_at": now,
 		}).Error; err != nil {
+			return err
+		}
+		if err := s.ensureTaskConfigForTypeTx(tx, userID, nextUserType, now); err != nil {
 			return err
 		}
 		if err := tx.Model(&models.UserActivationCode{}).Where("id = ?", code.ID).Updates(map[string]any{
@@ -684,17 +967,132 @@ func (s *Server) userRedeemCode(c *gin.Context) {
 		return
 	}
 	s.audit(models.ActorTypeUser, userID, "redeem_user_activation_code", "user", userID, datatypes.JSONMap{"code": req.Code}, c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{"message": "renewal success"})
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "renewal success"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "renewal success",
+		"user_type":  models.NormalizeUserType(user.UserType),
+		"expires_at": user.ExpiresAt,
+	})
+}
+
+func (s *Server) userGetMeProfile(c *gin.Context) {
+	userID := getUint(c, ctxUserIDKey)
+	tokenID := getUint(c, ctxUserTokenIDKey)
+
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		return
+	}
+
+	var token models.UserToken
+	if err := s.db.Where("id = ? AND user_id = ?", tokenID, userID).First(&token).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user token not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user_id":       user.ID,
+		"account_no":    user.AccountNo,
+		"manager_id":    user.ManagerID,
+		"user_type":     models.NormalizeUserType(user.UserType),
+		"status":        user.Status,
+		"expires_at":    user.ExpiresAt,
+		"assets":        deepMergeMap(taskmeta.BuildDefaultUserAssets(), map[string]any(user.Assets)),
+		"token_exp":     token.ExpiresAt,
+		"token_created": token.CreatedAt,
+		"last_used_at":  token.LastUsedAt,
+	})
+}
+
+func (s *Server) userLogout(c *gin.Context) {
+	var req userLogoutRequest
+	if raw := strings.TrimSpace(c.GetHeader("Content-Length")); raw != "" && raw != "0" {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+	}
+
+	userID := getUint(c, ctxUserIDKey)
+	tokenID := getUint(c, ctxUserTokenIDKey)
+	now := time.Now().UTC()
+
+	query := s.db.Model(&models.UserToken{}).Where("user_id = ? AND revoked_at IS NULL", userID)
+	if !req.All {
+		query = query.Where("id = ?", tokenID)
+	}
+	result := query.Updates(map[string]any{"revoked_at": now})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to revoke token"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, userID, "user_logout", "user_token", tokenID, datatypes.JSONMap{"all": req.All}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "logout success", "revoked": result.RowsAffected, "all": req.All})
+}
+
+func (s *Server) userGetMeAssets(c *gin.Context) {
+	userID := getUint(c, ctxUserIDKey)
+
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		return
+	}
+
+	assets := deepMergeMap(taskmeta.BuildDefaultUserAssets(), map[string]any(user.Assets))
+	c.JSON(http.StatusOK, gin.H{
+		"user_id":    user.ID,
+		"account_no": user.AccountNo,
+		"user_type":  models.NormalizeUserType(user.UserType),
+		"assets":     assets,
+		"expires_at": user.ExpiresAt,
+		"status":     user.Status,
+	})
 }
 
 func (s *Server) userGetMeTasks(c *gin.Context) {
 	userID := getUint(c, ctxUserIDKey)
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		return
+	}
 	config, err := s.getOrCreateTaskConfig(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to load task config"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"task_config": config.TaskConfig, "version": config.Version})
+	c.JSON(http.StatusOK, gin.H{
+		"user_type":   models.NormalizeUserType(user.UserType),
+		"task_config": config.TaskConfig,
+		"version":     config.Version,
+	})
+}
+
+func parseFlexibleDateTime(value string) (time.Time, error) {
+	candidates := []string{
+		time.RFC3339,
+		"2006-01-02 15:04",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	input := strings.TrimSpace(value)
+	if input == "" {
+		return time.Time{}, fmt.Errorf("empty datetime")
+	}
+	for _, layout := range candidates {
+		parsed, err := time.Parse(layout, input)
+		if err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid datetime")
 }
 
 func (s *Server) userPutMeTasks(c *gin.Context) {
@@ -706,10 +1104,23 @@ func (s *Server) userPutMeTasks(c *gin.Context) {
 	}
 	updated, err := s.mergeTaskConfig(userID, req.TaskConfig)
 	if err != nil {
+		if errors.Is(err, errInvalidTaskConfigPatch) {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "task_config contains tasks not allowed for this user type"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update task config"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"task_config": updated.TaskConfig, "version": updated.Version})
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"user_type":   models.NormalizeUserType(user.UserType),
+		"task_config": updated.TaskConfig,
+		"version":     updated.Version,
+	})
 }
 
 func (s *Server) userGetMeLogs(c *gin.Context) {
@@ -986,6 +1397,7 @@ func (s *Server) createUserByActivationCode(tx *gorm.DB, code *models.UserActiva
 	if code.Status != models.CodeStatusUnused {
 		return nil, fmt.Errorf("activation code already consumed")
 	}
+	userType := models.NormalizeUserType(code.UserType)
 	accountNo, err := s.generateAccountNo(tx)
 	if err != nil {
 		return nil, err
@@ -994,8 +1406,10 @@ func (s *Server) createUserByActivationCode(tx *gorm.DB, code *models.UserActiva
 	user := models.User{
 		AccountNo: accountNo,
 		ManagerID: code.ManagerID,
+		UserType:  userType,
 		Status:    models.UserStatusActive,
 		ExpiresAt: &newExpire,
+		Assets:    datatypes.JSONMap(taskmeta.BuildDefaultUserAssets()),
 		CreatedBy: createdBy,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -1011,7 +1425,12 @@ func (s *Server) createUserByActivationCode(tx *gorm.DB, code *models.UserActiva
 		return nil, err
 	}
 
-	cfg := models.UserTaskConfig{UserID: user.ID, TaskConfig: datatypes.JSONMap{}, UpdatedAt: now, Version: 1}
+	cfg := models.UserTaskConfig{
+		UserID:     user.ID,
+		TaskConfig: datatypes.JSONMap(taskmeta.BuildDefaultTaskConfigByType(userType)),
+		UpdatedAt:  now,
+		Version:    1,
+	}
 	if err := tx.Create(&cfg).Error; err != nil {
 		return nil, err
 	}
@@ -1097,11 +1516,22 @@ func (s *Server) managerOwnsUser(c *gin.Context, managerID, userID uint) bool {
 }
 
 func (s *Server) getOrCreateTaskConfig(userID uint) (*models.UserTaskConfig, error) {
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		return nil, err
+	}
+	userType := models.NormalizeUserType(user.UserType)
+
 	var cfg models.UserTaskConfig
 	err := s.db.Where("user_id = ?", userID).First(&cfg).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		now := time.Now().UTC()
-		cfg = models.UserTaskConfig{UserID: userID, TaskConfig: datatypes.JSONMap{}, UpdatedAt: now, Version: 1}
+		cfg = models.UserTaskConfig{
+			UserID:     userID,
+			TaskConfig: datatypes.JSONMap(taskmeta.BuildDefaultTaskConfigByType(userType)),
+			UpdatedAt:  now,
+			Version:    1,
+		}
 		if err := s.db.Create(&cfg).Error; err != nil {
 			return nil, err
 		}
@@ -1110,6 +1540,8 @@ func (s *Server) getOrCreateTaskConfig(userID uint) (*models.UserTaskConfig, err
 	if err != nil {
 		return nil, err
 	}
+	normalized := taskmeta.NormalizeTaskConfigByType(map[string]any(cfg.TaskConfig), userType)
+	cfg.TaskConfig = datatypes.JSONMap(normalized)
 	return &cfg, nil
 }
 
@@ -1117,10 +1549,25 @@ func (s *Server) mergeTaskConfig(userID uint, patch map[string]any) (*models.Use
 	now := time.Now().UTC()
 	var result models.UserTaskConfig
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var user models.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(&user).Error; err != nil {
+			return err
+		}
+		userType := models.NormalizeUserType(user.UserType)
+		filteredPatch, err := taskmeta.FilterTaskPatchByType(patch, userType)
+		if err != nil {
+			return fmt.Errorf("%w: %v", errInvalidTaskConfigPatch, err)
+		}
+
 		var cfg models.UserTaskConfig
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&cfg).Error
+		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&cfg).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			cfg = models.UserTaskConfig{UserID: userID, TaskConfig: datatypes.JSONMap{}, UpdatedAt: now, Version: 1}
+			cfg = models.UserTaskConfig{
+				UserID:     userID,
+				TaskConfig: datatypes.JSONMap(taskmeta.BuildDefaultTaskConfigByType(userType)),
+				UpdatedAt:  now,
+				Version:    1,
+			}
 			if err := tx.Create(&cfg).Error; err != nil {
 				return err
 			}
@@ -1128,11 +1575,8 @@ func (s *Server) mergeTaskConfig(userID uint, patch map[string]any) (*models.Use
 			return err
 		}
 
-		base := map[string]any(cfg.TaskConfig)
-		if base == nil {
-			base = map[string]any{}
-		}
-		merged := deepMergeMap(base, patch)
+		base := taskmeta.NormalizeTaskConfigByType(map[string]any(cfg.TaskConfig), userType)
+		merged := deepMergeMap(base, filteredPatch)
 		cfg.TaskConfig = datatypes.JSONMap(merged)
 		cfg.UpdatedAt = now
 		cfg.Version = cfg.Version + 1
@@ -1150,6 +1594,33 @@ func (s *Server) mergeTaskConfig(userID uint, patch map[string]any) (*models.Use
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (s *Server) ensureTaskConfigForTypeTx(tx *gorm.DB, userID uint, userType string, now time.Time) error {
+	resolvedType := models.NormalizeUserType(userType)
+	var cfg models.UserTaskConfig
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&cfg).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		cfg = models.UserTaskConfig{
+			UserID:     userID,
+			TaskConfig: datatypes.JSONMap(taskmeta.BuildDefaultTaskConfigByType(resolvedType)),
+			UpdatedAt:  now,
+			Version:    1,
+		}
+		return tx.Create(&cfg).Error
+	}
+	if err != nil {
+		return err
+	}
+	normalized := taskmeta.NormalizeTaskConfigByType(map[string]any(cfg.TaskConfig), resolvedType)
+	cfg.TaskConfig = datatypes.JSONMap(normalized)
+	cfg.UpdatedAt = now
+	cfg.Version = cfg.Version + 1
+	return tx.Model(&models.UserTaskConfig{}).Where("id = ?", cfg.ID).Updates(map[string]any{
+		"task_config": cfg.TaskConfig,
+		"updated_at":  cfg.UpdatedAt,
+		"version":     cfg.Version,
+	}).Error
 }
 
 func (s *Server) queryUserLogs(managerID, userID uint, limit int) ([]gin.H, error) {

@@ -1,7 +1,9 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"oas-cloud-go/internal/cache"
 	"oas-cloud-go/internal/config"
 	"oas-cloud-go/internal/models"
+	"oas-cloud-go/internal/taskmeta"
 
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -132,13 +135,14 @@ func (g *Generator) processUser(ctx context.Context, user models.User, now time.
 		return 0, err
 	}
 
-	taskConfig := map[string]any(cfg.TaskConfig)
-	if taskConfig == nil {
+	storedTaskConfig := map[string]any(cfg.TaskConfig)
+	if storedTaskConfig == nil {
 		return 0, nil
 	}
+	taskConfig := taskmeta.NormalizeTaskConfigByType(storedTaskConfig, user.UserType)
 
 	generated := 0
-	changed := false
+	changed := !jsonMapEqual(storedTaskConfig, taskConfig)
 	for taskType, rawTaskCfg := range taskConfig {
 		taskMap, ok := rawTaskCfg.(map[string]any)
 		if !ok {
@@ -196,6 +200,15 @@ func (g *Generator) processUser(ctx context.Context, user models.User, now time.
 	}
 
 	return generated, nil
+}
+
+func jsonMapEqual(left map[string]any, right map[string]any) bool {
+	leftRaw, leftErr := json.Marshal(left)
+	rightRaw, rightErr := json.Marshal(right)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return bytes.Equal(leftRaw, rightRaw)
 }
 
 func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap map[string]any, nextTime time.Time, now time.Time) (bool, error) {

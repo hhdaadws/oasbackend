@@ -19,6 +19,7 @@ func TestManagerCannotAccessOtherManagersUserTasks(t *testing.T) {
 	user := models.User{
 		AccountNo: "U_PERMISSION_001",
 		ManagerID: managerB.ID,
+		UserType:  models.UserTypeDaily,
 		Status:    models.UserStatusActive,
 		ExpiresAt: ptrTime(time.Now().UTC().Add(7 * 24 * time.Hour)),
 		CreatedBy: "manager_create",

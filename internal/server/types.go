@@ -23,15 +23,27 @@ type managerRedeemKeyRequest struct {
 }
 
 type createActivationCodeRequest struct {
-	DurationDays int `json:"duration_days" binding:"required,min=1,max=3650"`
+	DurationDays int    `json:"duration_days" binding:"required,min=1,max=3650"`
+	UserType     string `json:"user_type" binding:"required,oneof=daily duiyi shuaka"`
 }
 
 type quickCreateUserRequest struct {
-	DurationDays int `json:"duration_days" binding:"required,min=1,max=3650"`
+	DurationDays int    `json:"duration_days" binding:"required,min=1,max=3650"`
+	UserType     string `json:"user_type" binding:"required,oneof=daily duiyi shuaka"`
 }
 
 type putTaskConfigRequest struct {
 	TaskConfig map[string]any `json:"task_config" binding:"required"`
+}
+
+type managerPatchUserLifecycleRequest struct {
+	ExpiresAt  string `json:"expires_at"`
+	ExtendDays int    `json:"extend_days"`
+	Status     string `json:"status"`
+}
+
+type putUserAssetsRequest struct {
+	Assets map[string]any `json:"assets" binding:"required"`
 }
 
 type userRegisterByCodeRequest struct {
@@ -45,6 +57,10 @@ type userLoginRequest struct {
 
 type userRedeemCodeRequest struct {
 	Code string `json:"code" binding:"required,min=6,max=64"`
+}
+
+type userLogoutRequest struct {
+	All bool `json:"all"`
 }
 
 type agentLoginRequest struct {

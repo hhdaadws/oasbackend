@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/datatypes"
@@ -15,6 +16,10 @@ const (
 	UserStatusActive   = "active"
 	UserStatusExpired  = "expired"
 	UserStatusDisabled = "disabled"
+
+	UserTypeDaily  = "daily"
+	UserTypeDuiyi  = "duiyi"
+	UserTypeShuaka = "shuaka"
 
 	CodeStatusUnused  = "unused"
 	CodeStatusUsed    = "used"
@@ -63,14 +68,16 @@ type ManagerRenewalKey struct {
 }
 
 type User struct {
-	ID        uint       `gorm:"primaryKey"`
-	AccountNo string     `gorm:"size:64;not null;uniqueIndex"`
-	ManagerID uint       `gorm:"not null;index"`
-	Status    string     `gorm:"size:20;not null;default:expired;index"`
-	ExpiresAt *time.Time `gorm:"index"`
-	CreatedBy string     `gorm:"size:30;not null"`
-	CreatedAt time.Time  `gorm:"not null"`
-	UpdatedAt time.Time  `gorm:"not null"`
+	ID        uint              `gorm:"primaryKey"`
+	AccountNo string            `gorm:"size:64;not null;uniqueIndex"`
+	ManagerID uint              `gorm:"not null;index"`
+	UserType  string            `gorm:"size:20;not null;default:daily;index"`
+	Status    string            `gorm:"size:20;not null;default:expired;index"`
+	ExpiresAt *time.Time        `gorm:"index"`
+	Assets    datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	CreatedBy string            `gorm:"size:30;not null"`
+	CreatedAt time.Time         `gorm:"not null"`
+	UpdatedAt time.Time         `gorm:"not null"`
 }
 
 type UserToken struct {
@@ -87,6 +94,7 @@ type UserToken struct {
 type UserActivationCode struct {
 	ID           uint   `gorm:"primaryKey"`
 	ManagerID    uint   `gorm:"not null;index"`
+	UserType     string `gorm:"size:20;not null;default:daily;index"`
 	Code         string `gorm:"size:64;not null;uniqueIndex"`
 	DurationDays int    `gorm:"not null"`
 	Status       string `gorm:"size:20;not null;default:unused;index"`
@@ -166,4 +174,23 @@ func AutoMigrate(db *gorm.DB) error {
 		&AgentNode{},
 		&AuditLog{},
 	)
+}
+
+func NormalizeUserType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case UserTypeDaily:
+		return UserTypeDaily
+	case UserTypeDuiyi:
+		return UserTypeDuiyi
+	case UserTypeShuaka:
+		return UserTypeShuaka
+	default:
+		return UserTypeDaily
+	}
+}
+
+func IsValidUserType(value string) bool {
+	normalized := NormalizeUserType(value)
+	raw := strings.ToLower(strings.TrimSpace(value))
+	return raw == normalized
 }
