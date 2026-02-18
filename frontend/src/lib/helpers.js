@@ -9,6 +9,7 @@ export function keyStatusTagType(status) {
   if (status === "unused") return "success";
   if (status === "used") return "warning";
   if (status === "revoked") return "danger";
+  if (status === "deleted") return "danger";
   return "info";
 }
 
@@ -81,7 +82,7 @@ export function statusLabel(status) {
 }
 
 export function keyStatusLabel(status) {
-  const map = { unused: "未使用", used: "已使用", revoked: "已撤销" };
+  const map = { unused: "未使用", used: "已使用", revoked: "已撤销", deleted: "已删除" };
   return map[status] || status || "-";
 }
 

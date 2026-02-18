@@ -100,6 +100,8 @@ func (s *Server) mountRoutes() {
 		superGroup.POST("/managers/batch-lifecycle", s.superBatchManagerLifecycle)
 		superGroup.POST("/managers/batch-status", s.superBatchManagerStatus)
 		superGroup.POST("/manager-renewal-keys/batch-revoke", s.superBatchRevokeRenewalKeys)
+		superGroup.DELETE("/manager-renewal-keys/:id", s.superDeleteManagerRenewalKey)
+		superGroup.POST("/manager-renewal-keys/batch-delete", s.superBatchDeleteRenewalKeys)
 	}
 
 	managerAuthGroup := api.Group("/manager")
@@ -127,6 +129,8 @@ func (s *Server) mountRoutes() {
 		managerGroup.POST("/users/batch-lifecycle", s.managerBatchUserLifecycle)
 		managerGroup.POST("/users/batch-assets", s.managerBatchUserAssets)
 		managerGroup.POST("/activation-codes/batch-revoke", s.managerBatchRevokeActivationCodes)
+		managerGroup.DELETE("/activation-codes/:id", s.managerDeleteActivationCode)
+		managerGroup.POST("/activation-codes/batch-delete", s.managerBatchDeleteActivationCodes)
 	}
 
 	userGroup := api.Group("/user")
@@ -843,6 +847,56 @@ func (s *Server) superBatchRevokeRenewalKeys(c *gin.Context) {
 		"revoked": result.RowsAffected,
 	}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"revoked": result.RowsAffected, "requested": len(req.KeyIDs)})
+}
+
+func (s *Server) superDeleteManagerRenewalKey(c *gin.Context) {
+	keyID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	var key models.ManagerRenewalKey
+	if err := s.db.Where("id = ?", keyID).First(&key).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "renewal key not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query renewal key"})
+		return
+	}
+	if key.Status == models.CodeStatusUsed {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "used renewal key cannot be deleted"})
+		return
+	}
+	if err := s.db.Delete(&models.ManagerRenewalKey{}, keyID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to delete renewal key"})
+		return
+	}
+	actorID := getUint(c, ctxActorIDKey)
+	s.audit(models.ActorTypeSuper, actorID, "delete_manager_renewal_key", "manager_renewal_key", keyID, datatypes.JSONMap{
+		"code":   key.Code,
+		"status": key.Status,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "renewal key deleted"})
+}
+
+func (s *Server) superBatchDeleteRenewalKeys(c *gin.Context) {
+	var req batchRenewalKeyDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	actorID := getUint(c, ctxActorIDKey)
+
+	result := s.db.Where("id IN ? AND status = ?", req.IDs, models.CodeStatusUnused).Delete(&models.ManagerRenewalKey{})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch delete renewal keys"})
+		return
+	}
+	s.audit(models.ActorTypeSuper, actorID, "batch_delete_renewal_keys", "manager_renewal_key", 0, datatypes.JSONMap{
+		"ids":     req.IDs,
+		"deleted": result.RowsAffected,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected, "requested": len(req.IDs)})
 }
 
 func (s *Server) managerRedeemRenewalKey(c *gin.Context) {
@@ -1697,6 +1751,57 @@ func (s *Server) managerBatchRevokeActivationCodes(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"revoked": result.RowsAffected, "requested": len(req.CodeIDs)})
 }
 
+func (s *Server) managerDeleteActivationCode(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	codeID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+
+	var code models.UserActivationCode
+	if err := s.db.Where("id = ? AND manager_id = ?", codeID, managerID).First(&code).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "activation code not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query activation code"})
+		return
+	}
+	if code.Status == models.CodeStatusUsed {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "used activation code cannot be deleted"})
+		return
+	}
+	if err := s.db.Delete(&models.UserActivationCode{}, codeID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to delete activation code"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "delete_activation_code", "user_activation_code", codeID, datatypes.JSONMap{
+		"code":   code.Code,
+		"status": code.Status,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "activation code deleted"})
+}
+
+func (s *Server) managerBatchDeleteActivationCodes(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	var req batchActivationCodeDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	result := s.db.Where("id IN ? AND manager_id = ? AND status = ?", req.CodeIDs, managerID, models.CodeStatusUnused).Delete(&models.UserActivationCode{})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch delete activation codes"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "batch_delete_activation_codes", "user_activation_code", 0, datatypes.JSONMap{
+		"code_ids": req.CodeIDs,
+		"deleted":  result.RowsAffected,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected, "requested": len(req.CodeIDs)})
+}
+
 func (s *Server) userRegisterByCode(c *gin.Context) {
 	var req userRegisterByCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -2264,7 +2369,70 @@ func (s *Server) updateJobStatusByAgent(c *gin.Context, eventType string, nextSt
 			return
 		}
 	}
+
+	// Update next_time in UserTaskConfig after success or fail
+	if eventType == "success" || eventType == "fail" {
+		s.updateTaskNextTime(jobID, eventType, now)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
+}
+
+// updateTaskNextTime updates the next_time in UserTaskConfig after job success or fail.
+func (s *Server) updateTaskNextTime(jobID uint, eventType string, now time.Time) {
+	var job models.TaskJob
+	if err := s.db.Where("id = ?", jobID).First(&job).Error; err != nil {
+		return
+	}
+
+	var cfg models.UserTaskConfig
+	if err := s.db.Where("user_id = ?", job.UserID).First(&cfg).Error; err != nil {
+		return
+	}
+
+	taskConfig := map[string]any(cfg.TaskConfig)
+	if taskConfig == nil {
+		return
+	}
+
+	rawTaskCfg, ok := taskConfig[job.TaskType]
+	if !ok {
+		return
+	}
+	taskMap, ok := rawTaskCfg.(map[string]any)
+	if !ok {
+		return
+	}
+
+	var newNextTime time.Time
+	if eventType == "success" {
+		rule := taskmeta.GetNextTimeRule(job.TaskType)
+		if rule == "" || rule == "on_demand" {
+			return
+		}
+		newNextTime = taskmeta.CalcNextTime(rule, now)
+	} else if eventType == "fail" {
+		failDelay := taskmeta.ParseAssetInt(taskMap["fail_delay"], 30)
+		if failDelay <= 0 {
+			failDelay = 30
+		}
+		newNextTime = now.Add(time.Duration(failDelay) * time.Minute)
+	}
+
+	if newNextTime.IsZero() {
+		return
+	}
+
+	taskMap["next_time"] = newNextTime.UTC().Format("2006-01-02 15:04")
+	taskConfig[job.TaskType] = taskMap
+
+	_ = s.db.Model(&models.UserTaskConfig{}).
+		Where("id = ?", cfg.ID).
+		Updates(map[string]any{
+			"task_config": datatypes.JSONMap(taskConfig),
+			"updated_at":  now,
+			"version":     gorm.Expr("version + 1"),
+		}).Error
 }
 
 func (s *Server) createUserByActivationCode(tx *gorm.DB, code *models.UserActivationCode, createdBy string, now time.Time) (*models.User, error) {

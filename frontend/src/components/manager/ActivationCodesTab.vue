@@ -13,7 +13,7 @@
         <el-select v-model="filters.status" clearable placeholder="全部状态">
           <el-option label="未使用" value="unused" />
           <el-option label="已使用" value="used" />
-          <el-option label="已撤销" value="revoked" />
+          <el-option label="已删除" value="deleted" />
         </el-select>
         <el-select v-model="filters.user_type" clearable placeholder="全部类型">
           <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -34,8 +34,8 @@
           <strong class="stat-value">{{ summary.used }}</strong>
         </div>
         <div class="stat-item">
-          <span class="stat-label">已撤销</span>
-          <strong class="stat-value">{{ summary.revoked }}</strong>
+          <span class="stat-label">已删除</span>
+          <strong class="stat-value">{{ summary.deleted }}</strong>
         </div>
       </div>
     </section>
@@ -91,10 +91,10 @@
                 type="danger"
                 plain
                 size="small"
-                :loading="scope.row._revoking"
-                @click="revokeActivationCode(scope.row)"
+                :loading="scope.row._deleting"
+                @click="deleteActivationCode(scope.row)"
               >
-                撤销
+                删除
               </el-button>
               <span v-else class="muted">-</span>
             </template>
@@ -116,7 +116,7 @@
 
       <transition name="batch-bar">
         <BatchActionBar v-if="hasSelection" :selected-count="selectedCount" @clear="doClearSelection">
-          <el-button type="danger" :loading="loading.batchRevoke" @click="batchRevoke">批量撤销</el-button>
+          <el-button type="danger" :loading="loading.batchDelete" @click="batchDelete">批量删除</el-button>
         </BatchActionBar>
       </transition>
     </section>
@@ -187,7 +187,7 @@ const props = defineProps({
 const loading = reactive({
   activation: false,
   codes: false,
-  batchRevoke: false,
+  batchDelete: false,
 });
 
 const activationForm = reactive({ duration_days: 30, user_type: "daily", count: 1 });
@@ -205,6 +205,7 @@ const summary = reactive({
   unused: 0,
   used: 0,
   revoked: 0,
+  deleted: 0,
 });
 
 const { pagination, updateTotal, resetPage, paginationParams } = usePagination({ defaultPageSize: 50 });
@@ -274,9 +275,9 @@ async function loadActivationCodes() {
     const response = await managerApi.listActivationCodes(props.token, params);
     activationCodes.value = (response.items || []).map((item) => ({
       ...item,
-      _revoking: false,
+      _deleting: false,
     }));
-    patchSummary(summary, response.summary, ["total", "unused", "used", "revoked"]);
+    patchSummary(summary, response.summary, ["total", "unused", "used", "revoked", "deleted"]);
     updateTotal(response.total || response.summary?.total || activationCodes.value.length);
   } catch (error) {
     ElMessage.error(parseApiError(error));
@@ -285,54 +286,54 @@ async function loadActivationCodes() {
   }
 }
 
-async function revokeActivationCode(row) {
+async function deleteActivationCode(row) {
   if (!row?.id) {
     ElMessage.warning("无效激活码记录");
     return;
   }
   try {
     await ElMessageBox.confirm(
-      `确定要撤销激活码 "${row.code}" 吗？撤销后无法恢复。`,
-      "确认撤销",
-      { confirmButtonText: "确定撤销", cancelButtonText: "取消", type: "warning" },
+      `确定要删除激活码 "${row.code}" 吗？删除后无法恢复。`,
+      "确认删除",
+      { confirmButtonText: "确定删除", cancelButtonText: "取消", type: "warning" },
     );
   } catch {
     return;
   }
-  row._revoking = true;
+  row._deleting = true;
   try {
-    await managerApi.patchActivationCodeStatus(props.token, row.id, { status: "revoked" });
-    ElMessage.success("激活码已撤销");
+    await managerApi.deleteActivationCode(props.token, row.id);
+    ElMessage.success("激活码已删除");
     await loadActivationCodes();
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
-    row._revoking = false;
+    row._deleting = false;
   }
 }
 
-async function batchRevoke() {
+async function batchDelete() {
   if (!hasSelection.value) return;
   const ids = [...selectedIds.value];
   try {
     await ElMessageBox.confirm(
-      `确定要批量撤销 ${ids.length} 个激活码吗？撤销后无法恢复。`,
-      "批量撤销确认",
-      { confirmButtonText: "确定撤销", cancelButtonText: "取消", type: "warning" },
+      `确定要批量删除 ${ids.length} 个激活码吗？删除后无法恢复。`,
+      "批量删除确认",
+      { confirmButtonText: "确定删除", cancelButtonText: "取消", type: "warning" },
     );
   } catch {
     return;
   }
-  loading.batchRevoke = true;
+  loading.batchDelete = true;
   try {
-    await managerApi.batchRevokeActivationCodes(props.token, { code_ids: ids });
-    ElMessage.success(`已批量撤销 ${ids.length} 个激活码`);
+    await managerApi.batchDeleteActivationCodes(props.token, { code_ids: ids });
+    ElMessage.success(`已批量删除 ${ids.length} 个激活码`);
     doClearSelection();
     await loadActivationCodes();
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
-    loading.batchRevoke = false;
+    loading.batchDelete = false;
   }
 }
 

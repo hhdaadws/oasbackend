@@ -22,7 +22,7 @@ const loading = reactive({ createKey: false, keys: false });
 const renewalForm = reactive({ duration_days: 30 });
 const latestRenewal = reactive({ code: "", duration_days: 0 });
 const keyFilters = reactive({ keyword: "", status: "" });
-const keySummary = reactive({ total: 0, unused: 0, used: 0, revoked: 0 });
+const keySummary = reactive({ total: 0, unused: 0, used: 0, revoked: 0, deleted: 0 });
 const renewalKeys = ref([]);
 const tableRef = ref(null);
 const showCreateDialog = ref(false);
@@ -63,39 +63,39 @@ async function createRenewalKey() {
   }
 }
 
-async function revokeRenewalKey(row) {
+async function deleteRenewalKey(row) {
   if (!row?.id) { ElMessage.warning("无效秘钥记录"); return; }
   try {
     await ElMessageBox.confirm(
-      `确定要撤销秘钥 "${row.code}" 吗？撤销后无法恢复。`,
-      "确认撤销",
-      { confirmButtonText: "确定撤销", cancelButtonText: "取消", type: "warning" },
+      `确定要删除秘钥 "${row.code}" 吗？删除后无法恢复。`,
+      "确认删除",
+      { confirmButtonText: "确定删除", cancelButtonText: "取消", type: "warning" },
     );
   } catch { return; }
-  row._revoking = true;
+  row._deleting = true;
   try {
-    await superApi.patchManagerRenewalKeyStatus(props.token, row.id, { status: "revoked" });
-    ElMessage.success("续费秘钥已撤销");
+    await superApi.deleteRenewalKey(props.token, row.id);
+    ElMessage.success("续费秘钥已删除");
     await loadRenewalKeys();
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
-    row._revoking = false;
+    row._deleting = false;
   }
 }
 
-async function batchRevokeKeys() {
+async function batchDeleteKeys() {
   if (!hasSelection.value) return;
   try {
     await ElMessageBox.confirm(
-      `确定要批量撤销 ${selectedCount.value} 个秘钥吗？撤销后无法恢复。`,
-      "确认批量撤销",
-      { confirmButtonText: "确定撤销", cancelButtonText: "取消", type: "warning" },
+      `确定要批量删除 ${selectedCount.value} 个秘钥吗？删除后无法恢复。`,
+      "确认批量删除",
+      { confirmButtonText: "确定删除", cancelButtonText: "取消", type: "warning" },
     );
   } catch { return; }
   try {
-    const res = await superApi.batchRevokeRenewalKeys(props.token, { key_ids: selectedIds.value });
-    ElMessage.success(`已撤销 ${res.revoked} 个秘钥`);
+    const res = await superApi.batchDeleteRenewalKeys(props.token, { key_ids: selectedIds.value });
+    ElMessage.success(`已删除 ${res.deleted} 个秘钥`);
     clearSelection();
     if (tableRef.value) tableRef.value.clearSelection();
     await loadRenewalKeys();
@@ -115,9 +115,9 @@ async function loadRenewalKeys() {
     });
     renewalKeys.value = (response.items || []).map((item) => ({
       ...item,
-      _revoking: false,
+      _deleting: false,
     }));
-    patchSummary(keySummary, response.summary, ["total", "unused", "used", "revoked"]);
+    patchSummary(keySummary, response.summary, ["total", "unused", "used", "revoked", "deleted"]);
     updateTotal(response.total || 0);
   } catch (error) {
     ElMessage.error(parseApiError(error));
@@ -154,7 +154,7 @@ async function copyKeyCode(code) {
         <el-select v-model="keyFilters.status" clearable placeholder="全部状态">
           <el-option label="未使用" value="unused" />
           <el-option label="已使用" value="used" />
-          <el-option label="已撤销" value="revoked" />
+          <el-option label="已删除" value="deleted" />
         </el-select>
       </el-form-item>
     </el-form>
@@ -179,8 +179,8 @@ async function copyKeyCode(code) {
         <strong class="stat-value">{{ keySummary.used }}</strong>
       </div>
       <div class="stat-item">
-        <span class="stat-label">已撤销</span>
-        <strong class="stat-value">{{ keySummary.revoked }}</strong>
+        <span class="stat-label">已删除</span>
+        <strong class="stat-value">{{ keySummary.deleted }}</strong>
       </div>
     </div>
   </section>
@@ -236,10 +236,10 @@ async function copyKeyCode(code) {
               type="danger"
               plain
               size="small"
-              :loading="scope.row._revoking"
-              @click="revokeRenewalKey(scope.row)"
+              :loading="scope.row._deleting"
+              @click="deleteRenewalKey(scope.row)"
             >
-              撤销
+              删除
             </el-button>
             <span v-else class="muted">-</span>
           </template>
@@ -248,7 +248,7 @@ async function copyKeyCode(code) {
     </div>
 
     <BatchActionBar :selected-count="selectedCount" @clear="() => { clearSelection(); tableRef?.clearSelection(); }">
-      <el-button type="danger" @click="batchRevokeKeys">批量撤销</el-button>
+      <el-button type="danger" @click="batchDeleteKeys">批量删除</el-button>
     </BatchActionBar>
 
     <div class="pagination-wrapper">

@@ -126,3 +126,11 @@ type batchManagerStatusRequest struct {
 type batchRenewalKeyRevokeRequest struct {
 	KeyIDs []uint `json:"key_ids" binding:"required,min=1,max=500"`
 }
+
+type batchRenewalKeyDeleteRequest struct {
+	IDs []uint `json:"ids" binding:"required,min=1,max=500"`
+}
+
+type batchActivationCodeDeleteRequest struct {
+	CodeIDs []uint `json:"code_ids" binding:"required,min=1,max=500"`
+}

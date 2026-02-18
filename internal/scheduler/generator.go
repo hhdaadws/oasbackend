@@ -103,6 +103,14 @@ func (g *Generator) runOnce(ctx context.Context) {
 	scanned := 0
 	var runErr error
 
+	// Rest window: skip generation during Beijing time 00:00–05:59
+	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
+	bjHour := now.In(bjLoc).Hour()
+	if bjHour >= 0 && bjHour < 6 {
+		g.updateStats(now, 0, 0, nil)
+		return
+	}
+
 	users := make([]models.User, 0, g.cfg.SchedulerScanLimit)
 	query := g.db.Where("status = ? AND expires_at IS NOT NULL AND expires_at > ?", models.UserStatusActive, now).Order("id asc")
 	if g.cfg.SchedulerScanLimit > 0 {

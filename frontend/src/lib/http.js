@@ -116,6 +116,19 @@ export const superApi = {
       data: payload,
       headers: withBearer(token),
     }),
+  deleteRenewalKey: (token, id) =>
+    request({
+      method: "DELETE",
+      url: `/super/manager-renewal-keys/${id}`,
+      headers: withBearer(token),
+    }),
+  batchDeleteRenewalKeys: (token, data) =>
+    request({
+      method: "POST",
+      url: "/super/manager-renewal-keys/batch-delete",
+      data,
+      headers: withBearer(token),
+    }),
 };
 
 export const managerApi = {
@@ -236,6 +249,19 @@ export const managerApi = {
       method: "POST",
       url: "/manager/activation-codes/batch-revoke",
       data: payload,
+      headers: withBearer(token),
+    }),
+  deleteActivationCode: (token, id) =>
+    request({
+      method: "DELETE",
+      url: `/manager/activation-codes/${id}`,
+      headers: withBearer(token),
+    }),
+  batchDeleteActivationCodes: (token, data) =>
+    request({
+      method: "POST",
+      url: "/manager/activation-codes/batch-delete",
+      data,
       headers: withBearer(token),
     }),
 };
