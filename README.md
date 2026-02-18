@@ -9,9 +9,10 @@ Go cloud backend for OAS runtime linkage.
 - Framework: **Vue 3 + Vite + Element Plus**
 - Location: `frontend/`
 - Includes full role consoles:
-  - Super admin: bootstrap init/login, manager renewal key issuing, manager status management
-  - Manager: register/login, redeem renewal key, activation code issuing, quick create user, user task/log management
-  - User: register by activation code, account login, redeem code, self task/log management
+  - Unified login portal: role-based auth entry for super admin / manager / user
+  - Super admin page: bootstrap init, login, renewal key issuing, manager status management
+  - Manager page: renewal redeem, activation code issuing, quick create user, sub-user task/log management
+  - User page: register by activation code, account login, redeem code, self task/log management
 
 ## Quick start
 
@@ -74,9 +75,14 @@ Scheduler status endpoint:
 - URL: `http://localhost:8088` (frontend)
 - Backend API via nginx reverse proxy: `/api/v1/*`
 - Backend direct health check: `http://localhost:8080/health`
+- Pull images from Docker Hub:
+  - `miku66/oasbackend`
+  - `miku66/oasbackend-frontend`
 
 ```bash
-docker compose up -d --build
+cp .env.example .env
+docker compose pull
+docker compose up -d
 ```
 
 ## Production deployment stack
@@ -84,7 +90,10 @@ docker compose up -d --build
 Production example with HTTPS + secrets + backup + monitoring:
 
 - Compose file: `deploy/production/docker-compose.prod.yml`
-- GitHub Actions image: `miku66/oasbackend` (tags: `latest`, `sha-*`, `v*`)
+- GitHub Actions images:
+  - `miku66/oasbackend` (backend)
+  - `miku66/oasbackend-frontend` (frontend)
+  - tags: `latest`, `sha-*`, `v*`
 - Includes:
   - Caddy automatic HTTPS termination
   - Docker secrets-based credential injection

@@ -1,9 +1,15 @@
 import axios from "axios";
 
 const baseURL = import.meta.env.VITE_API_BASE || "/api/v1";
+const rootApiBase = import.meta.env.VITE_ROOT_API_BASE || "";
 
 const http = axios.create({
   baseURL,
+  timeout: 15000,
+});
+
+const rootHttp = axios.create({
+  baseURL: rootApiBase,
   timeout: 15000,
 });
 
@@ -15,6 +21,25 @@ export async function request(config) {
   const response = await http.request(config);
   return response.data;
 }
+
+export async function rootRequest(config) {
+  const response = await rootHttp.request(config);
+  return response.data;
+}
+
+export function parseApiError(error) {
+  return (
+    error?.response?.data?.detail ||
+    error?.response?.data?.message ||
+    error?.message ||
+    "请求失败"
+  );
+}
+
+export const commonApi = {
+  health: () => rootRequest({ method: "GET", url: "/health" }),
+  schedulerStatus: () => request({ method: "GET", url: "/scheduler/status" }),
+};
 
 export const superApi = {
   bootstrapStatus: () => request({ method: "GET", url: "/bootstrap/status" }),
