@@ -221,6 +221,24 @@ func createActiveManager(t *testing.T, db *gorm.DB, username string, password st
 	return manager
 }
 
+func createSuperAdmin(t *testing.T, db *gorm.DB, username string, password string) models.SuperAdmin {
+	t.Helper()
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatalf("hash password failed: %v", err)
+	}
+	admin := models.SuperAdmin{
+		Username:     username,
+		PasswordHash: hash,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if err := db.Create(&admin).Error; err != nil {
+		t.Fatalf("create super admin failed: %v", err)
+	}
+	return admin
+}
+
 func ptrTime(value time.Time) *time.Time {
 	return &value
 }

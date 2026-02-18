@@ -92,16 +92,26 @@ func (s *Server) mountRoutes() {
 	superGroup.Use(s.requireJWT(models.ActorTypeSuper))
 	{
 		superGroup.POST("/manager-renewal-keys", s.superCreateManagerRenewalKey)
+		superGroup.GET("/manager-renewal-keys", s.superListManagerRenewalKeys)
+		superGroup.PATCH("/manager-renewal-keys/:id/status", s.superPatchManagerRenewalKeyStatus)
 		superGroup.GET("/managers", s.superListManagers)
 		superGroup.PATCH("/managers/:id/status", s.superPatchManagerStatus)
+		superGroup.PATCH("/managers/:id/lifecycle", s.superPatchManagerLifecycle)
+	}
+
+	managerAuthGroup := api.Group("/manager")
+	managerAuthGroup.Use(s.requireJWT(models.ActorTypeManager))
+	{
+		managerAuthGroup.POST("/auth/redeem-renewal-key", s.managerRedeemRenewalKey)
 	}
 
 	managerGroup := api.Group("/manager")
-	managerGroup.Use(s.requireJWT(models.ActorTypeManager))
+	managerGroup.Use(s.requireJWT(models.ActorTypeManager), s.requireManagerActive())
 	{
-		managerGroup.POST("/auth/redeem-renewal-key", s.managerRedeemRenewalKey)
 		managerGroup.GET("/overview", s.managerOverview)
 		managerGroup.POST("/activation-codes", s.managerCreateActivationCode)
+		managerGroup.GET("/activation-codes", s.managerListActivationCodes)
+		managerGroup.PATCH("/activation-codes/:id/status", s.managerPatchActivationCodeStatus)
 		managerGroup.POST("/users/quick-create", s.managerQuickCreateUser)
 		managerGroup.GET("/users", s.managerListUsers)
 		managerGroup.PATCH("/users/:user_id/lifecycle", s.managerPatchUserLifecycle)
@@ -322,16 +332,20 @@ func (s *Server) managerLogin(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"detail": "manager disabled"})
 		return
 	}
-	if manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "manager expired"})
-		return
-	}
 	token, err := s.tokenManager.IssueJWT(models.ActorTypeManager, manager.ID, manager.ID, s.cfg.JWTTTL)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to issue token"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"token": token, "role": models.ActorTypeManager, "manager_id": manager.ID})
+	expired := manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) || manager.Status != models.ManagerStatusActive
+	c.JSON(http.StatusOK, gin.H{
+		"token":      token,
+		"role":       models.ActorTypeManager,
+		"manager_id": manager.ID,
+		"status":     manager.Status,
+		"expires_at": manager.ExpiresAt,
+		"expired":    expired,
+	})
 }
 
 func (s *Server) superCreateManagerRenewalKey(c *gin.Context) {
@@ -363,13 +377,194 @@ func (s *Server) superCreateManagerRenewalKey(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"code": key.Code, "duration_days": key.DurationDays})
 }
 
+func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
+	status := strings.TrimSpace(c.Query("status"))
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	limit := readQueryInt(c, "limit", 200, 1, 2000)
+	if status != "" && !isCodeStatus(status) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		return
+	}
+
+	query := s.db.Model(&models.ManagerRenewalKey{}).Order("id desc").Limit(limit)
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if keyword != "" {
+		query = query.Where("code LIKE ?", "%"+keyword+"%")
+	}
+
+	var keys []models.ManagerRenewalKey
+	if err := query.Find(&keys).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query renewal keys"})
+		return
+	}
+
+	managerIDs := make([]uint, 0, len(keys))
+	managerIDSet := map[uint]struct{}{}
+	for _, key := range keys {
+		if key.UsedByManagerID == nil {
+			continue
+		}
+		if _, exists := managerIDSet[*key.UsedByManagerID]; exists {
+			continue
+		}
+		managerIDSet[*key.UsedByManagerID] = struct{}{}
+		managerIDs = append(managerIDs, *key.UsedByManagerID)
+	}
+
+	managerNameMap := map[uint]string{}
+	if len(managerIDs) > 0 {
+		var managers []models.Manager
+		if err := s.db.Where("id IN ?", managerIDs).Find(&managers).Error; err == nil {
+			for _, manager := range managers {
+				managerNameMap[manager.ID] = manager.Username
+			}
+		}
+	}
+
+	items := make([]gin.H, 0, len(keys))
+	var totalCount int64
+	var unusedCount int64
+	var usedCount int64
+	var revokedCount int64
+	_ = s.db.Model(&models.ManagerRenewalKey{}).Count(&totalCount).Error
+	_ = s.db.Model(&models.ManagerRenewalKey{}).Where("status = ?", models.CodeStatusUnused).Count(&unusedCount).Error
+	_ = s.db.Model(&models.ManagerRenewalKey{}).Where("status = ?", models.CodeStatusUsed).Count(&usedCount).Error
+	_ = s.db.Model(&models.ManagerRenewalKey{}).Where("status = ?", models.CodeStatusRevoked).Count(&revokedCount).Error
+	for _, key := range keys {
+		var usedByManagerID any
+		var usedByManagerUsername any
+		if key.UsedByManagerID != nil {
+			usedByManagerID = *key.UsedByManagerID
+			usedByManagerUsername = managerNameMap[*key.UsedByManagerID]
+		}
+		items = append(items, gin.H{
+			"id":                        key.ID,
+			"code":                      key.Code,
+			"duration_days":             key.DurationDays,
+			"status":                    key.Status,
+			"used_by_manager_id":        usedByManagerID,
+			"used_by_manager_username":  usedByManagerUsername,
+			"used_at":                   key.UsedAt,
+			"created_by_super_admin_id": key.CreatedBySuperAdminID,
+			"created_at":                key.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"summary": gin.H{
+			"total":   totalCount,
+			"unused":  unusedCount,
+			"used":    usedCount,
+			"revoked": revokedCount,
+		},
+	})
+}
+
 func (s *Server) superListManagers(c *gin.Context) {
+	status := strings.TrimSpace(c.Query("status"))
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	limit := readQueryInt(c, "limit", 500, 1, 2000)
+	if status != "" && !isManagerStatus(status) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		return
+	}
+
+	query := s.db.Model(&models.Manager{}).Order("id desc").Limit(limit)
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if keyword != "" {
+		query = query.Where("username LIKE ?", "%"+keyword+"%")
+	}
+
 	var managers []models.Manager
-	if err := s.db.Order("id asc").Find(&managers).Error; err != nil {
+	if err := query.Find(&managers).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query managers"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": managers})
+
+	now := time.Now().UTC()
+	expiringThreshold := now.Add(7 * 24 * time.Hour)
+	summary := gin.H{
+		"total":       len(managers),
+		"active":      0,
+		"expired":     0,
+		"disabled":    0,
+		"expiring_7d": 0,
+	}
+
+	items := make([]gin.H, 0, len(managers))
+	for _, manager := range managers {
+		expiresAt := manager.ExpiresAt
+		isExpired := expiresAt == nil || !expiresAt.After(now)
+		if manager.Status == models.ManagerStatusActive {
+			summary["active"] = summary["active"].(int) + 1
+		}
+		if manager.Status == models.ManagerStatusExpired {
+			summary["expired"] = summary["expired"].(int) + 1
+		}
+		if manager.Status == models.ManagerStatusDisabled {
+			summary["disabled"] = summary["disabled"].(int) + 1
+		}
+		if manager.Status == models.ManagerStatusActive && expiresAt != nil && expiresAt.After(now) && expiresAt.Before(expiringThreshold) {
+			summary["expiring_7d"] = summary["expiring_7d"].(int) + 1
+		}
+		items = append(items, gin.H{
+			"id":         manager.ID,
+			"username":   manager.Username,
+			"status":     manager.Status,
+			"expires_at": manager.ExpiresAt,
+			"is_expired": isExpired,
+			"created_at": manager.CreatedAt,
+			"updated_at": manager.UpdatedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "summary": summary})
+}
+
+func (s *Server) superPatchManagerRenewalKeyStatus(c *gin.Context) {
+	var req patchCodeStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	keyID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+
+	var key models.ManagerRenewalKey
+	if err := s.db.Where("id = ?", keyID).First(&key).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "renewal key not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query renewal key"})
+		return
+	}
+	if key.Status == models.CodeStatusUsed {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "used renewal key cannot be revoked"})
+		return
+	}
+	if key.Status == models.CodeStatusRevoked {
+		c.JSON(http.StatusOK, gin.H{"message": "renewal key already revoked"})
+		return
+	}
+
+	if err := s.db.Model(&models.ManagerRenewalKey{}).Where("id = ?", keyID).Updates(map[string]any{
+		"status": models.CodeStatusRevoked,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to revoke renewal key"})
+		return
+	}
+	actorID := getUint(c, ctxActorIDKey)
+	s.audit(models.ActorTypeSuper, actorID, "patch_manager_renewal_key_status", "manager_renewal_key", keyID, datatypes.JSONMap{
+		"status": req.Status,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "renewal key revoked"})
 }
 
 func (s *Server) superPatchManagerStatus(c *gin.Context) {
@@ -389,13 +584,99 @@ func (s *Server) superPatchManagerStatus(c *gin.Context) {
 		now := time.Now().UTC()
 		updates["expires_at"] = now
 	}
-	if err := s.db.Model(&models.Manager{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	result := s.db.Model(&models.Manager{}).Where("id = ?", id).Updates(updates)
+	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to patch manager"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "manager not found"})
 		return
 	}
 	actorID := getUint(c, ctxActorIDKey)
 	s.audit(models.ActorTypeSuper, actorID, "patch_manager_status", "manager", uint(id), datatypes.JSONMap{"status": req.Status}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": "manager status updated"})
+}
+
+func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
+	managerID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+
+	var req superPatchManagerLifecycleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least one field must be provided"})
+		return
+	}
+
+	now := time.Now().UTC()
+	var manager models.Manager
+	if err := s.db.Where("id = ?", managerID).First(&manager).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "manager not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query manager"})
+		return
+	}
+
+	updates := map[string]any{"updated_at": now}
+	hasExpiryUpdate := false
+	if rawExpires := strings.TrimSpace(req.ExpiresAt); rawExpires != "" {
+		parsed, err := parseFlexibleDateTime(rawExpires)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid expires_at format"})
+			return
+		}
+		updates["expires_at"] = parsed
+		hasExpiryUpdate = true
+	}
+	if req.ExtendDays != 0 {
+		if req.ExtendDays < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "extend_days must be positive"})
+			return
+		}
+		newExpire := extendExpiry(manager.ExpiresAt, req.ExtendDays, now)
+		updates["expires_at"] = newExpire
+		hasExpiryUpdate = true
+	}
+
+	if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
+		if !isManagerStatus(rawStatus) {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+			return
+		}
+		updates["status"] = rawStatus
+	} else if hasExpiryUpdate {
+		expireValue, has := updates["expires_at"]
+		if has {
+			expireTime, ok := expireValue.(time.Time)
+			if ok {
+				if expireTime.After(now) {
+					updates["status"] = models.ManagerStatusActive
+				} else {
+					updates["status"] = models.ManagerStatusExpired
+				}
+			}
+		}
+	}
+
+	if err := s.db.Model(&models.Manager{}).Where("id = ?", managerID).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to patch manager lifecycle"})
+		return
+	}
+	actorID := getUint(c, ctxActorIDKey)
+	s.audit(models.ActorTypeSuper, actorID, "patch_manager_lifecycle", "manager", managerID, datatypes.JSONMap{
+		"expires_at":  req.ExpiresAt,
+		"extend_days": req.ExtendDays,
+		"status":      req.Status,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "manager lifecycle updated"})
 }
 
 func (s *Server) managerRedeemRenewalKey(c *gin.Context) {
@@ -486,6 +767,147 @@ func (s *Server) managerCreateActivationCode(c *gin.Context) {
 	})
 }
 
+func (s *Server) managerListActivationCodes(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	status := strings.TrimSpace(c.Query("status"))
+	userType := strings.TrimSpace(c.Query("user_type"))
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	limit := readQueryInt(c, "limit", 200, 1, 2000)
+
+	if status != "" && !isCodeStatus(status) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		return
+	}
+	if userType != "" && !models.IsValidUserType(userType) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid user_type"})
+		return
+	}
+
+	query := s.db.Model(&models.UserActivationCode{}).
+		Where("manager_id = ?", managerID).
+		Order("id desc").
+		Limit(limit)
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if userType != "" {
+		query = query.Where("user_type = ?", models.NormalizeUserType(userType))
+	}
+	if keyword != "" {
+		query = query.Where("code LIKE ?", "%"+keyword+"%")
+	}
+
+	var codes []models.UserActivationCode
+	if err := query.Find(&codes).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query activation codes"})
+		return
+	}
+
+	userIDs := make([]uint, 0, len(codes))
+	seen := map[uint]struct{}{}
+	for _, code := range codes {
+		if code.UsedByUserID == nil {
+			continue
+		}
+		if _, ok := seen[*code.UsedByUserID]; ok {
+			continue
+		}
+		seen[*code.UsedByUserID] = struct{}{}
+		userIDs = append(userIDs, *code.UsedByUserID)
+	}
+	accountMap := map[uint]string{}
+	if len(userIDs) > 0 {
+		var users []models.User
+		if err := s.db.Where("id IN ? AND manager_id = ?", userIDs, managerID).Find(&users).Error; err == nil {
+			for _, user := range users {
+				accountMap[user.ID] = user.AccountNo
+			}
+		}
+	}
+
+	var totalCount int64
+	var unusedCount int64
+	var usedCount int64
+	var revokedCount int64
+	_ = s.db.Model(&models.UserActivationCode{}).Where("manager_id = ?", managerID).Count(&totalCount).Error
+	_ = s.db.Model(&models.UserActivationCode{}).Where("manager_id = ? AND status = ?", managerID, models.CodeStatusUnused).Count(&unusedCount).Error
+	_ = s.db.Model(&models.UserActivationCode{}).Where("manager_id = ? AND status = ?", managerID, models.CodeStatusUsed).Count(&usedCount).Error
+	_ = s.db.Model(&models.UserActivationCode{}).Where("manager_id = ? AND status = ?", managerID, models.CodeStatusRevoked).Count(&revokedCount).Error
+
+	items := make([]gin.H, 0, len(codes))
+	for _, code := range codes {
+		var usedByUserID any
+		var usedByAccountNo any
+		if code.UsedByUserID != nil {
+			usedByUserID = *code.UsedByUserID
+			usedByAccountNo = accountMap[*code.UsedByUserID]
+		}
+		items = append(items, gin.H{
+			"id":                 code.ID,
+			"code":               code.Code,
+			"user_type":          models.NormalizeUserType(code.UserType),
+			"duration_days":      code.DurationDays,
+			"status":             code.Status,
+			"used_by_user_id":    usedByUserID,
+			"used_by_account_no": usedByAccountNo,
+			"used_at":            code.UsedAt,
+			"created_at":         code.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"summary": gin.H{
+			"total":   totalCount,
+			"unused":  unusedCount,
+			"used":    usedCount,
+			"revoked": revokedCount,
+		},
+	})
+}
+
+func (s *Server) managerPatchActivationCodeStatus(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	codeID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+
+	var req patchCodeStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	var code models.UserActivationCode
+	if err := s.db.Where("id = ? AND manager_id = ?", codeID, managerID).First(&code).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "activation code not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query activation code"})
+		return
+	}
+	if code.Status == models.CodeStatusUsed {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "used activation code cannot be revoked"})
+		return
+	}
+	if code.Status == models.CodeStatusRevoked {
+		c.JSON(http.StatusOK, gin.H{"message": "activation code already revoked"})
+		return
+	}
+	if err := s.db.Model(&models.UserActivationCode{}).Where("id = ?", codeID).Updates(map[string]any{
+		"status": models.CodeStatusRevoked,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to revoke activation code"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "patch_activation_code_status", "user_activation_code", codeID, datatypes.JSONMap{
+		"status": req.Status,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "activation code revoked"})
+}
+
 func (s *Server) managerQuickCreateUser(c *gin.Context) {
 	var req quickCreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -538,15 +960,63 @@ func (s *Server) managerQuickCreateUser(c *gin.Context) {
 
 func (s *Server) managerListUsers(c *gin.Context) {
 	managerID := getUint(c, ctxActorIDKey)
+	status := strings.TrimSpace(c.Query("status"))
+	userType := strings.TrimSpace(c.Query("user_type"))
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	limit := readQueryInt(c, "limit", 800, 1, 5000)
+	if status != "" && !isUserStatus(status) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		return
+	}
+	if userType != "" && !models.IsValidUserType(userType) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid user_type"})
+		return
+	}
+
+	query := s.db.Where("manager_id = ?", managerID).Order("id asc").Limit(limit)
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if userType != "" {
+		query = query.Where("user_type = ?", models.NormalizeUserType(userType))
+	}
+	if keyword != "" {
+		query = query.Where("account_no LIKE ?", "%"+keyword+"%")
+	}
 	var users []models.User
-	if err := s.db.Where("manager_id = ?", managerID).Order("id asc").Find(&users).Error; err != nil {
+	if err := query.Find(&users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query users"})
 		return
 	}
+	summary := gin.H{
+		"total":    len(users),
+		"active":   0,
+		"expired":  0,
+		"disabled": 0,
+		"daily":    0,
+		"duiyi":    0,
+		"shuaka":   0,
+	}
 	for index := range users {
 		users[index].UserType = models.NormalizeUserType(users[index].UserType)
+		switch users[index].Status {
+		case models.UserStatusActive:
+			summary["active"] = summary["active"].(int) + 1
+		case models.UserStatusExpired:
+			summary["expired"] = summary["expired"].(int) + 1
+		case models.UserStatusDisabled:
+			summary["disabled"] = summary["disabled"].(int) + 1
+		}
+		switch users[index].UserType {
+		case models.UserTypeDaily:
+			summary["daily"] = summary["daily"].(int) + 1
+		case models.UserTypeDuiyi:
+			summary["duiyi"] = summary["duiyi"].(int) + 1
+		case models.UserTypeShuaka:
+			summary["shuaka"] = summary["shuaka"].(int) + 1
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"items": users})
+	c.JSON(http.StatusOK, gin.H{"items": users, "summary": summary})
 }
 
 func (s *Server) managerOverview(c *gin.Context) {
@@ -1650,6 +2120,33 @@ func (s *Server) queryUserLogs(managerID, userID uint, limit int) ([]gin.H, erro
 		})
 	}
 	return result, nil
+}
+
+func isCodeStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case models.CodeStatusUnused, models.CodeStatusUsed, models.CodeStatusRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+func isManagerStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case models.ManagerStatusActive, models.ManagerStatusExpired, models.ManagerStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+func isUserStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case models.UserStatusActive, models.UserStatusExpired, models.UserStatusDisabled:
+		return true
+	default:
+		return false
+	}
 }
 
 func parseUintParam(c *gin.Context, key string) (uint, bool) {

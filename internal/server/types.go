@@ -18,6 +18,10 @@ type patchManagerStatusRequest struct {
 	Status string `json:"status" binding:"required,oneof=active expired disabled"`
 }
 
+type patchCodeStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=revoked"`
+}
+
 type managerRedeemKeyRequest struct {
 	Code string `json:"code" binding:"required,min=6,max=64"`
 }
@@ -37,6 +41,12 @@ type putTaskConfigRequest struct {
 }
 
 type managerPatchUserLifecycleRequest struct {
+	ExpiresAt  string `json:"expires_at"`
+	ExtendDays int    `json:"extend_days"`
+	Status     string `json:"status"`
+}
+
+type superPatchManagerLifecycleRequest struct {
 	ExpiresAt  string `json:"expires_at"`
 	ExtendDays int    `json:"extend_days"`
 	Status     string `json:"status"`

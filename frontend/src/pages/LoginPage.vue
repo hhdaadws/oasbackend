@@ -1,5 +1,5 @@
 <template>
-  <div class="page-shell">
+  <div class="page-shell page-shell--login">
     <header class="console-header glass-card stagger-1">
       <div class="brand">
         <p class="eyebrow">Cloud Command Center</p>
@@ -8,101 +8,96 @@
           独立登录页仅提供管理员和普通用户入口。超级管理员页面需手动输入 URL 访问。
         </p>
       </div>
-      <div class="status-pills">
-        <el-tag :type="platform.health.ok ? 'success' : 'danger'" effect="dark">
-          API {{ platform.health.ok ? "在线" : "异常" }}
-        </el-tag>
-        <el-tag :type="platform.scheduler.enabled ? 'warning' : 'info'" effect="dark">
-          调度器 {{ platform.scheduler.enabled ? "启用" : "停用" }}
-        </el-tag>
-        <el-button text type="primary" @click="refreshPlatformStatus">刷新状态</el-button>
-      </div>
     </header>
 
-    <section class="auth-grid">
-      <article class="auth-card glass-card stagger-2">
+    <section class="login-center-wrap">
+      <section class="auth-card glass-card stagger-2 login-center-card">
+      <el-tabs v-model="activeAuthTab" class="module-tabs">
+        <el-tab-pane label="管理员登录" name="manager">
+          <div class="panel-headline">
+            <h3>管理员登录</h3>
+            <el-tag type="success" v-if="session.managerToken">已登录</el-tag>
+          </div>
+
+          <el-form :model="managerForm" label-width="90px" class="compact-form">
+            <el-form-item label="账号">
+              <el-input v-model="managerForm.username" class="auth-input" placeholder="manager_demo" clearable />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input v-model="managerForm.password" class="auth-input" type="password" show-password />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="warning" :loading="loading.managerRegister" @click="registerManager">公共注册</el-button>
+              <el-button type="primary" :loading="loading.managerLogin" @click="loginManager">登录并进入</el-button>
+            </el-form-item>
+          </el-form>
+          <el-alert
+            type="info"
+            :closable="false"
+            title="管理员注册后默认过期，请登录后在管理员页面兑换续费秘钥。"
+          />
+        </el-tab-pane>
+
+        <el-tab-pane label="普通用户登录" name="user">
+          <div class="panel-headline">
+            <h3>普通用户登录</h3>
+            <el-tag type="success" v-if="session.userToken">已登录</el-tag>
+          </div>
+
+          <el-form :model="userForm" label-width="98px" class="compact-form">
+            <el-form-item label="激活码注册">
+              <el-input v-model="userForm.registerCode" class="auth-input" placeholder="uac_xxx" clearable />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="warning" :loading="loading.userRegister" @click="registerUserByCode">
+                注册并进入
+              </el-button>
+            </el-form-item>
+
+            <el-divider />
+
+            <el-form-item label="账号登录">
+              <el-input v-model="userForm.accountNo" class="auth-input" placeholder="U2026..." clearable />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="loading.userLogin" @click="loginUser">登录并进入</el-button>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+      </el-tabs>
+      </section>
+
+      <section class="session-card glass-card stagger-4 login-session-card">
         <div class="panel-headline">
-          <h3>管理员登录</h3>
-          <el-tag type="success" v-if="session.managerToken">已登录</el-tag>
+          <h3>当前会话</h3>
         </div>
-
-        <el-form :model="managerForm" label-width="90px" class="compact-form">
-          <el-form-item label="账号">
-            <el-input v-model="managerForm.username" placeholder="manager_demo" clearable />
-          </el-form-item>
-          <el-form-item label="密码">
-            <el-input v-model="managerForm.password" type="password" show-password />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="warning" :loading="loading.managerRegister" @click="registerManager">公共注册</el-button>
-            <el-button type="primary" :loading="loading.managerLogin" @click="loginManager">登录并进入</el-button>
-          </el-form-item>
-        </el-form>
-        <el-alert
-          type="info"
-          :closable="false"
-          title="管理员注册后默认过期，请登录后在管理员页面兑换续费秘钥。"
-        />
-      </article>
-
-      <article class="auth-card glass-card stagger-3">
-        <div class="panel-headline">
-          <h3>普通用户登录</h3>
-          <el-tag type="success" v-if="session.userToken">已登录</el-tag>
+        <div class="session-actions">
+          <el-button
+            type="primary"
+            plain
+            :disabled="!session.managerToken"
+            @click="$emit('navigate', '/manager')"
+          >
+            进入管理员页面
+          </el-button>
+          <el-button
+            type="success"
+            plain
+            :disabled="!session.userToken"
+            @click="$emit('navigate', '/user')"
+          >
+            进入普通用户页面
+          </el-button>
         </div>
-
-        <el-form :model="userForm" label-width="98px" class="compact-form">
-          <el-form-item label="激活码注册">
-            <el-input v-model="userForm.registerCode" placeholder="uac_xxx" clearable />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="warning" :loading="loading.userRegister" @click="registerUserByCode">
-              注册并进入
-            </el-button>
-          </el-form-item>
-
-          <el-divider />
-
-          <el-form-item label="账号登录">
-            <el-input v-model="userForm.accountNo" placeholder="U2026..." clearable />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="loading.userLogin" @click="loginUser">登录并进入</el-button>
-          </el-form-item>
-        </el-form>
-      </article>
-    </section>
-
-    <section class="session-card glass-card stagger-4">
-      <div class="panel-headline">
-        <h3>当前会话</h3>
-      </div>
-      <div class="session-actions">
-        <el-button
-          type="primary"
-          plain
-          :disabled="!session.managerToken"
-          @click="$emit('navigate', '/manager')"
-        >
-          进入管理员页面
-        </el-button>
-        <el-button
-          type="success"
-          plain
-          :disabled="!session.userToken"
-          @click="$emit('navigate', '/user')"
-        >
-          进入普通用户页面
-        </el-button>
-      </div>
+      </section>
     </section>
   </div>
 </template>
 
 <script setup>
-import { onMounted, reactive } from "vue";
+import { reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { commonApi, managerApi, parseApiError, userApi } from "../lib/http";
+import { managerApi, parseApiError, userApi } from "../lib/http";
 import { setManagerToken, setUserSession } from "../lib/session";
 
 const props = defineProps({
@@ -113,6 +108,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["navigate", "session-updated"]);
+const activeAuthTab = ref("manager");
 
 const managerForm = reactive({
   username: "",
@@ -124,36 +120,12 @@ const userForm = reactive({
   accountNo: props.session.userAccountNo || "",
 });
 
-const platform = reactive({
-  health: { ok: false },
-  scheduler: { enabled: false },
-});
-
 const loading = reactive({
   managerRegister: false,
   managerLogin: false,
   userRegister: false,
   userLogin: false,
 });
-
-onMounted(async () => {
-  await refreshPlatformStatus();
-});
-
-async function refreshPlatformStatus() {
-  try {
-    const [health, scheduler] = await Promise.all([
-      commonApi.health(),
-      commonApi.schedulerStatus(),
-    ]);
-    platform.health.ok = health?.status === "ok";
-    platform.scheduler.enabled = !!scheduler?.enabled;
-  } catch (error) {
-    platform.health.ok = false;
-    platform.scheduler.enabled = false;
-    ElMessage.warning(parseApiError(error));
-  }
-}
 
 async function registerManager() {
   const username = managerForm.username.trim();

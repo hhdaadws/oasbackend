@@ -9,7 +9,9 @@
     </el-empty>
 
     <template v-else>
-      <section class="panel-grid panel-grid--user">
+      <el-tabs v-model="activeTab" class="module-tabs">
+        <el-tab-pane label="账号与续费" name="account">
+          <section class="panel-grid panel-grid--user">
         <article class="panel-card panel-card--highlight">
           <div class="panel-headline">
             <h3>用户会话信息</h3>
@@ -38,9 +40,9 @@
             title="续费规则：未过期顺延，已过期从当前时刻重算"
           />
         </article>
-      </section>
+          </section>
 
-      <section class="panel-card">
+          <section class="panel-card">
         <div class="panel-headline">
           <h3>我的账号资料</h3>
           <div class="row-actions">
@@ -83,9 +85,9 @@
             <strong class="stat-value">{{ profile.manager_id || "-" }}</strong>
           </div>
         </div>
-      </section>
+          </section>
 
-      <section class="panel-card">
+          <section class="panel-card">
         <div class="panel-headline">
           <h3>我的资产</h3>
           <el-button plain :loading="loading.assets" @click="loadMeAssets">刷新资产</el-button>
@@ -96,10 +98,12 @@
             <strong class="stat-value">{{ meAssets[asset.key] ?? 0 }}</strong>
           </div>
         </div>
-      </section>
+          </section>
+        </el-tab-pane>
 
-      <section class="panel-grid panel-grid--user-detail">
-        <article class="panel-card">
+        <el-tab-pane label="任务配置" name="tasks">
+          <section class="panel-card">
+            <article class="panel-card">
           <div class="panel-headline">
             <h3>我的任务配置（{{ userTypeLabel(profile.user_type) }}）</h3>
             <div class="row-actions">
@@ -137,9 +141,13 @@
             </el-collapse-item>
           </el-collapse>
           <p class="tip-text">系统会按用户类型过滤任务，并按“默认 + 现有 + 提交”合并更新。</p>
-        </article>
+            </article>
+          </section>
+        </el-tab-pane>
 
-        <article class="panel-card">
+        <el-tab-pane label="执行日志" name="logs">
+          <section class="panel-card">
+            <article class="panel-card">
           <div class="panel-headline">
             <h3>我的执行日志</h3>
             <div class="row-actions">
@@ -147,14 +155,16 @@
               <el-button plain :loading="loading.logs" @click="loadMeLogs">刷新日志</el-button>
             </div>
           </div>
-          <el-table :data="logs" border stripe height="390" empty-text="暂无日志">
+          <el-table :data="logs" border stripe height="420" empty-text="暂无日志">
             <el-table-column prop="event_at" label="时间" min-width="170" />
             <el-table-column prop="event_type" label="事件" width="130" />
             <el-table-column prop="error_code" label="错误码" width="130" />
             <el-table-column prop="message" label="消息" min-width="220" />
           </el-table>
-        </article>
-      </section>
+            </article>
+          </section>
+        </el-tab-pane>
+      </el-tabs>
     </template>
   </div>
 </template>
@@ -193,6 +203,7 @@ const taskConfigRaw = ref("{}");
 const logs = ref([]);
 const logsLimit = ref(80);
 const logoutAll = ref(false);
+const activeTab = ref("account");
 const templateCache = reactive({});
 
 const profile = reactive({

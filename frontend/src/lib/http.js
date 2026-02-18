@@ -60,16 +60,38 @@ export const superApi = {
       data: payload,
       headers: withBearer(token),
     }),
-  listManagers: (token) =>
+  listManagerRenewalKeys: (token, params = {}) =>
+    request({
+      method: "GET",
+      url: "/super/manager-renewal-keys",
+      params,
+      headers: withBearer(token),
+    }),
+  listManagers: (token, params = {}) =>
     request({
       method: "GET",
       url: "/super/managers",
+      params,
+      headers: withBearer(token),
+    }),
+  patchManagerRenewalKeyStatus: (token, keyId, payload) =>
+    request({
+      method: "PATCH",
+      url: `/super/manager-renewal-keys/${keyId}/status`,
+      data: payload,
       headers: withBearer(token),
     }),
   patchManagerStatus: (token, managerId, payload) =>
     request({
       method: "PATCH",
       url: `/super/managers/${managerId}/status`,
+      data: payload,
+      headers: withBearer(token),
+    }),
+  patchManagerLifecycle: (token, managerId, payload) =>
+    request({
+      method: "PATCH",
+      url: `/super/managers/${managerId}/lifecycle`,
       data: payload,
       headers: withBearer(token),
     }),
@@ -127,10 +149,25 @@ export const managerApi = {
       data: payload,
       headers: withBearer(token),
     }),
-  listUsers: (token) =>
+  listUsers: (token, params = {}) =>
     request({
       method: "GET",
       url: "/manager/users",
+      params,
+      headers: withBearer(token),
+    }),
+  listActivationCodes: (token, params = {}) =>
+    request({
+      method: "GET",
+      url: "/manager/activation-codes",
+      params,
+      headers: withBearer(token),
+    }),
+  patchActivationCodeStatus: (token, codeId, payload) =>
+    request({
+      method: "PATCH",
+      url: `/manager/activation-codes/${codeId}/status`,
+      data: payload,
       headers: withBearer(token),
     }),
   getUserTasks: (token, userId) =>

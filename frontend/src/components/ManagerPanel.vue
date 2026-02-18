@@ -9,6 +9,8 @@
     </el-empty>
 
     <template v-else>
+      <el-tabs v-model="activeTab" class="module-tabs">
+        <el-tab-pane label="总览与发码" name="overview">
       <section class="panel-card">
         <div class="panel-headline">
           <h3>运营总览</h3>
@@ -98,6 +100,101 @@
         </article>
       </section>
 
+      </el-tab-pane>
+
+      <el-tab-pane label="激活码管理" name="codes">
+      <section class="panel-card panel-card--compact">
+        <div class="panel-headline">
+          <h3>激活码管理</h3>
+          <el-button text type="primary" :loading="loading.activationCodes" @click="loadActivationCodes">刷新</el-button>
+        </div>
+        <el-form label-width="90px" class="compact-form">
+          <el-form-item label="关键词">
+            <el-input v-model="activationCodeFilters.keyword" placeholder="按激活码检索" clearable />
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-select v-model="activationCodeFilters.status" clearable placeholder="全部状态">
+              <el-option label="unused" value="unused" />
+              <el-option label="used" value="used" />
+              <el-option label="revoked" value="revoked" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="类型">
+            <el-select v-model="activationCodeFilters.user_type" clearable placeholder="全部类型">
+              <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="数量">
+            <el-input-number v-model="activationCodeFilters.limit" :min="20" :max="2000" :step="20" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" plain @click="loadActivationCodes">应用筛选</el-button>
+          </el-form-item>
+        </el-form>
+
+        <div class="stats-grid">
+          <div class="stat-item">
+            <span class="stat-label">总数</span>
+            <strong class="stat-value">{{ activationSummary.total }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">unused</span>
+            <strong class="stat-value">{{ activationSummary.unused }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">used</span>
+            <strong class="stat-value">{{ activationSummary.used }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">revoked</span>
+            <strong class="stat-value">{{ activationSummary.revoked }}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel-card">
+        <div class="panel-headline">
+          <h3>激活码列表</h3>
+          <span class="muted">当前列表 {{ activationCodes.length }} 条</span>
+        </div>
+        <el-table :data="activationCodes" border stripe height="280" empty-text="暂无激活码数据">
+          <el-table-column prop="id" label="ID" width="80" />
+          <el-table-column prop="code" label="激活码" min-width="220" />
+          <el-table-column prop="user_type" label="类型" width="120">
+            <template #default="scope">
+              <el-tag type="info">{{ userTypeLabel(scope.row.user_type) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="duration_days" label="天数" width="100" />
+          <el-table-column prop="status" label="状态" width="120">
+            <template #default="scope">
+              <el-tag :type="keyStatusTagType(scope.row.status)">{{ scope.row.status }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="used_by_account_no" label="使用账号" min-width="170" />
+          <el-table-column prop="used_at" label="使用时间" min-width="170" />
+          <el-table-column prop="created_at" label="创建时间" min-width="170" />
+          <el-table-column label="操作" width="120">
+            <template #default="scope">
+              <el-button
+                v-if="scope.row.status === 'unused'"
+                type="danger"
+                plain
+                size="small"
+                :loading="scope.row._revoking"
+                @click="revokeActivationCode(scope.row)"
+              >
+                撤销
+              </el-button>
+              <span v-else class="muted">-</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+
+      </el-tab-pane>
+
+      <el-tab-pane label="下属配置" name="users">
       <section class="panel-card">
         <div class="panel-headline">
           <h3>下属用户列表</h3>
@@ -108,6 +205,40 @@
               <el-option label="expired" value="expired" />
               <el-option label="disabled" value="disabled" />
             </el-select>
+            <el-select v-model="filters.userType" clearable placeholder="类型过滤" style="width: 130px">
+              <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </div>
+        </div>
+
+        <div class="stats-grid" style="margin-bottom: 10px;">
+          <div class="stat-item">
+            <span class="stat-label">总数</span>
+            <strong class="stat-value">{{ userSummary.total }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">active</span>
+            <strong class="stat-value">{{ userSummary.active }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">expired</span>
+            <strong class="stat-value">{{ userSummary.expired }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">disabled</span>
+            <strong class="stat-value">{{ userSummary.disabled }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">日常</span>
+            <strong class="stat-value">{{ userSummary.daily }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">对弈竞猜</span>
+            <strong class="stat-value">{{ userSummary.duiyi }}</strong>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">刷卡</span>
+            <strong class="stat-value">{{ userSummary.shuaka }}</strong>
           </div>
         </div>
 
@@ -214,6 +345,9 @@
         </article>
       </section>
 
+      </el-tab-pane>
+
+      <el-tab-pane label="执行日志" name="logs">
       <section class="panel-card" v-if="selectedUserId">
         <div class="panel-headline">
           <h3>用户 {{ selectedUserId }} 执行日志</h3>
@@ -229,6 +363,13 @@
           <el-table-column prop="message" label="消息" min-width="220" />
         </el-table>
       </section>
+      <el-empty
+        v-else
+        description="请先在“下属配置”中选择用户后再查看日志"
+        :image-size="120"
+      />
+      </el-tab-pane>
+      </el-tabs>
     </template>
   </div>
 </template>
@@ -251,6 +392,7 @@ const loading = reactive({
   redeem: false,
   activation: false,
   quickCreate: false,
+  activationCodes: false,
   overview: false,
   users: false,
   tasks: false,
@@ -265,13 +407,21 @@ const loading = reactive({
 const redeemForm = reactive({ code: "" });
 const activationForm = reactive({ duration_days: 30, user_type: "daily" });
 const quickForm = reactive({ duration_days: 30, user_type: "daily" });
-const filters = reactive({ keyword: "", status: "" });
+const filters = reactive({ keyword: "", status: "", userType: "" });
+const activationCodeFilters = reactive({
+  keyword: "",
+  status: "",
+  user_type: "",
+  limit: 200,
+});
 
 const latestActivationCode = ref("");
 const latestActivationType = ref("daily");
 const quickCreatedAccount = ref("");
 const quickCreatedUserType = ref("daily");
+const activeTab = ref("overview");
 const users = ref([]);
+const activationCodes = ref([]);
 const selectedUserId = ref(0);
 const selectedUserType = ref("daily");
 const selectedTaskConfigRaw = ref("{}");
@@ -283,6 +433,23 @@ const userTypeOptions = ref([
   { value: "duiyi", label: "对弈竞猜" },
   { value: "shuaka", label: "刷卡" },
 ]);
+
+const activationSummary = reactive({
+  total: 0,
+  unused: 0,
+  used: 0,
+  revoked: 0,
+});
+
+const userSummary = reactive({
+  total: 0,
+  active: 0,
+  expired: 0,
+  disabled: 0,
+  daily: 0,
+  duiyi: 0,
+  shuaka: 0,
+});
 
 const lifecycleForm = reactive({
   extend_days: 0,
@@ -341,7 +508,8 @@ const filteredUsers = computed(() => {
   return users.value.filter((item) => {
     const matchKeyword = !keyword || item.account_no?.toLowerCase().includes(keyword);
     const matchStatus = !filters.status || item.status === filters.status;
-    return matchKeyword && matchStatus;
+    const matchType = !filters.userType || item.user_type === filters.userType;
+    return matchKeyword && matchStatus && matchType;
   });
 });
 
@@ -371,6 +539,7 @@ watch(
   async (value) => {
     if (!value) {
       users.value = [];
+      activationCodes.value = [];
       selectedUserId.value = 0;
       selectedUserType.value = "daily";
       selectedTaskConfigRaw.value = "{}";
@@ -378,8 +547,7 @@ watch(
       return;
     }
     await ensureTaskTemplates("daily");
-    await loadUsers();
-    await loadOverview();
+    await Promise.all([loadUsers(), loadOverview(), loadActivationCodes()]);
   },
   { immediate: true },
 );
@@ -387,8 +555,7 @@ watch(
 onMounted(async () => {
   if (props.token) {
     await ensureTaskTemplates("daily");
-    await loadUsers();
-    await loadOverview();
+    await Promise.all([loadUsers(), loadOverview(), loadActivationCodes()]);
   }
 });
 
@@ -397,6 +564,20 @@ function statusTagType(status) {
   if (status === "disabled") return "danger";
   if (status === "expired") return "warning";
   return "info";
+}
+
+function keyStatusTagType(status) {
+  if (status === "unused") return "success";
+  if (status === "used") return "warning";
+  if (status === "revoked") return "danger";
+  return "info";
+}
+
+function patchSummary(target, source, keys) {
+  keys.forEach((key) => {
+    const value = Number(source?.[key] ?? 0);
+    target[key] = Number.isFinite(value) ? value : 0;
+  });
 }
 
 function userTypeLabel(userType) {
@@ -487,6 +668,7 @@ async function createActivationCode() {
     latestActivationCode.value = response.code || "";
     latestActivationType.value = response.user_type || activationForm.user_type;
     ElMessage.success("用户激活码已生成");
+    await loadActivationCodes();
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
@@ -512,11 +694,50 @@ async function quickCreateUser() {
   }
 }
 
+async function loadActivationCodes() {
+  loading.activationCodes = true;
+  try {
+    const response = await managerApi.listActivationCodes(props.token, {
+      keyword: activationCodeFilters.keyword || undefined,
+      status: activationCodeFilters.status || undefined,
+      user_type: activationCodeFilters.user_type || undefined,
+      limit: activationCodeFilters.limit,
+    });
+    activationCodes.value = (response.items || []).map((item) => ({
+      ...item,
+      _revoking: false,
+    }));
+    patchSummary(activationSummary, response.summary, ["total", "unused", "used", "revoked"]);
+  } catch (error) {
+    ElMessage.error(parseApiError(error));
+  } finally {
+    loading.activationCodes = false;
+  }
+}
+
+async function revokeActivationCode(row) {
+  if (!row?.id) {
+    ElMessage.warning("无效激活码记录");
+    return;
+  }
+  row._revoking = true;
+  try {
+    await managerApi.patchActivationCodeStatus(props.token, row.id, { status: "revoked" });
+    ElMessage.success("激活码已撤销");
+    await loadActivationCodes();
+  } catch (error) {
+    ElMessage.error(parseApiError(error));
+  } finally {
+    row._revoking = false;
+  }
+}
+
 async function loadUsers() {
   loading.users = true;
   try {
-    const response = await managerApi.listUsers(props.token);
+    const response = await managerApi.listUsers(props.token, { limit: 2000 });
     users.value = response.items || [];
+    patchSummary(userSummary, response.summary, ["total", "active", "expired", "disabled", "daily", "duiyi", "shuaka"]);
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
@@ -547,6 +768,7 @@ async function loadOverview() {
 
 async function selectUser(row) {
   selectedUserId.value = row.id;
+  activeTab.value = "users";
   selectedUserType.value = row.user_type || "daily";
   lifecycleForm.expires_at = row.expires_at || "";
   lifecycleForm.extend_days = 0;

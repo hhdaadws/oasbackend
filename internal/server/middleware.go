@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"gorm.io/gorm"
 	"oas-cloud-go/internal/auth"
 	"oas-cloud-go/internal/models"
 
@@ -106,6 +107,42 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 		c.Set(ctxUserIDKey, user.ID)
 		c.Set(ctxUserTokenIDKey, token.ID)
 		c.Set(ctxManagerIDKey, user.ManagerID)
+		c.Next()
+	}
+}
+
+func (s *Server) requireManagerActive() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		managerID := getUint(c, ctxActorIDKey)
+		if managerID == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"detail": "missing manager identity"})
+			c.Abort()
+			return
+		}
+
+		var manager models.Manager
+		if err := s.db.Where("id = ?", managerID).First(&manager).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				c.JSON(http.StatusUnauthorized, gin.H{"detail": "manager not found"})
+				c.Abort()
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query manager"})
+			c.Abort()
+			return
+		}
+
+		now := time.Now().UTC()
+		if manager.Status == models.ManagerStatusDisabled {
+			c.JSON(http.StatusForbidden, gin.H{"detail": "manager disabled"})
+			c.Abort()
+			return
+		}
+		if manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) || manager.Status != models.ManagerStatusActive {
+			c.JSON(http.StatusForbidden, gin.H{"detail": "manager expired"})
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }

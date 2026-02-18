@@ -16,11 +16,12 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import LoginPage from "./pages/LoginPage.vue";
 import ManagerPage from "./pages/ManagerPage.vue";
+import SuperAdminLoginPage from "./pages/SuperAdminLoginPage.vue";
 import SuperAdminPage from "./pages/SuperAdminPage.vue";
 import UserPage from "./pages/UserPage.vue";
 import { getSession } from "./lib/session";
 
-const ROUTES = new Set(["/login", "/manager", "/user", "/super-admin"]);
+const ROUTES = new Set(["/login", "/manager", "/user", "/super-admin-login", "/super-admin"]);
 
 const currentPath = ref(resolvePath(window.location.pathname));
 const session = reactive(getSession());
@@ -32,6 +33,9 @@ const currentComponent = computed(() => {
   if (currentPath.value === "/user") {
     return UserPage;
   }
+  if (currentPath.value === "/super-admin-login") {
+    return SuperAdminLoginPage;
+  }
   if (currentPath.value === "/super-admin") {
     return SuperAdminPage;
   }
@@ -39,14 +43,22 @@ const currentComponent = computed(() => {
 });
 
 watch(
-  [currentPath, () => session.managerToken, () => session.userToken],
-  ([path, managerToken, userToken]) => {
+  [currentPath, () => session.managerToken, () => session.userToken, () => session.superToken],
+  ([path, managerToken, userToken, superToken]) => {
     if (path === "/manager" && !managerToken) {
       navigate("/login", { replace: true });
       return;
     }
     if (path === "/user" && !userToken) {
       navigate("/login", { replace: true });
+      return;
+    }
+    if (path === "/super-admin" && !superToken) {
+      navigate("/super-admin-login", { replace: true });
+      return;
+    }
+    if (path === "/super-admin-login" && superToken) {
+      navigate("/super-admin", { replace: true });
     }
   },
   { immediate: true },
