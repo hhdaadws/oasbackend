@@ -206,36 +206,27 @@
                 </template>
               </el-table-column>
               <el-table-column prop="expires_at" label="到期时间" min-width="190" />
-              <el-table-column label="状态变更" width="280">
+              <el-table-column label="设置到期时间" min-width="200">
+                <template #default="scope">
+                  <el-input v-model="scope.row._editExpiresAt" placeholder="YYYY-MM-DD HH:mm" />
+                </template>
+              </el-table-column>
+              <el-table-column label="延长天数" width="150">
                 <template #default="scope">
                   <div class="row-actions">
-                    <el-select v-model="scope.row._targetStatus" placeholder="选择状态" style="width: 130px">
-                      <el-option label="active" value="active" />
-                      <el-option label="expired" value="expired" />
-                      <el-option label="disabled" value="disabled" />
-                    </el-select>
-                    <el-button
-                      type="primary"
-                      :loading="scope.row._saving"
-                      :disabled="!scope.row._targetStatus"
-                      @click="patchManagerStatus(scope.row)"
-                    >
-                      保存
-                    </el-button>
+                    <el-input-number v-model="scope.row._extendDays" :min="0" :max="3650" :step="1" />
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column label="续期" width="250">
+              <el-table-column label="操作" width="120">
                 <template #default="scope">
                   <div class="row-actions">
-                    <el-input-number v-model="scope.row._extendDays" :min="1" :max="3650" :step="1" />
                     <el-button
-                      type="success"
-                      plain
-                      :loading="scope.row._extending"
-                      @click="extendManager(scope.row)"
+                      type="primary"
+                      :loading="scope.row._updating"
+                      @click="saveManagerLifecycle(scope.row)"
                     >
-                      续期
+                      保存
                     </el-button>
                   </div>
                 </template>
@@ -419,10 +410,9 @@ async function loadManagers() {
     });
     managers.value = (response.items || []).map((item) => ({
       ...item,
-      _targetStatus: item.status,
-      _saving: false,
-      _extending: false,
-      _extendDays: 30,
+      _updating: false,
+      _editExpiresAt: item.expires_at || "",
+      _extendDays: 0,
     }));
     patchSummary(managerSummary, response.summary, ["total", "active", "expired", "disabled", "expiring_7d"]);
   } catch (error) {
@@ -432,50 +422,29 @@ async function loadManagers() {
   }
 }
 
-async function patchManagerStatus(row) {
+async function saveManagerLifecycle(row) {
   if (!row?.id) {
     ElMessage.warning("无效管理员记录");
     return;
   }
-  if (!row._targetStatus) {
-    ElMessage.warning("请选择目标状态");
-    return;
-  }
-  row._saving = true;
-  try {
-    await superApi.patchManagerStatus(props.token, row.id, {
-      status: row._targetStatus,
-    });
-    ElMessage.success(`管理员 ${row.username} 状态已更新`);
-    await loadManagers();
-  } catch (error) {
-    ElMessage.error(parseApiError(error));
-  } finally {
-    row._saving = false;
-  }
-}
-
-async function extendManager(row) {
-  if (!row?.id) {
-    ElMessage.warning("无效管理员记录");
-    return;
-  }
+  const expiresAt = String(row._editExpiresAt || "").trim();
   const extendDays = Number(row._extendDays || 0);
-  if (extendDays <= 0) {
-    ElMessage.warning("续期天数必须大于 0");
+  if (!expiresAt && extendDays <= 0) {
+    ElMessage.warning("请填写到期时间或延长天数");
     return;
   }
-  row._extending = true;
+  row._updating = true;
+  const payload = {};
+  if (expiresAt) payload.expires_at = expiresAt;
+  if (extendDays > 0) payload.extend_days = extendDays;
   try {
-    await superApi.patchManagerLifecycle(props.token, row.id, {
-      extend_days: extendDays,
-    });
-    ElMessage.success(`管理员 ${row.username} 续期成功`);
+    await superApi.patchManagerLifecycle(props.token, row.id, payload);
+    ElMessage.success(`管理员 ${row.username} 生命周期已更新`);
     await loadManagers();
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
-    row._extending = false;
+    row._updating = false;
   }
 }
 </script>

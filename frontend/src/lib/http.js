@@ -102,6 +102,12 @@ export const managerApi = {
     request({ method: "POST", url: "/manager/auth/register", data: payload }),
   login: (payload) =>
     request({ method: "POST", url: "/manager/auth/login", data: payload }),
+  me: (token) =>
+    request({
+      method: "GET",
+      url: "/manager/auth/me",
+      headers: withBearer(token),
+    }),
   redeemRenewalKey: (token, payload) =>
     request({
       method: "POST",

@@ -102,6 +102,7 @@ func (s *Server) mountRoutes() {
 	managerAuthGroup := api.Group("/manager")
 	managerAuthGroup.Use(s.requireJWT(models.ActorTypeManager))
 	{
+		managerAuthGroup.GET("/auth/me", s.managerGetMe)
 		managerAuthGroup.POST("/auth/redeem-renewal-key", s.managerRedeemRenewalKey)
 	}
 
@@ -730,6 +731,28 @@ func (s *Server) managerRedeemRenewalKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "renewal success"})
 }
 
+func (s *Server) managerGetMe(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	var manager models.Manager
+	if err := s.db.Where("id = ?", managerID).First(&manager).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "manager not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query manager"})
+		return
+	}
+	now := time.Now().UTC()
+	expired := manager.ExpiresAt == nil || !manager.ExpiresAt.After(now)
+	c.JSON(http.StatusOK, gin.H{
+		"id":         manager.ID,
+		"username":   manager.Username,
+		"status":     manager.Status,
+		"expires_at": manager.ExpiresAt,
+		"expired":    expired,
+	})
+}
+
 func (s *Server) managerCreateActivationCode(c *gin.Context) {
 	var req createActivationCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -988,6 +1011,7 @@ func (s *Server) managerListUsers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query users"})
 		return
 	}
+	now := time.Now().UTC()
 	summary := gin.H{
 		"total":    len(users),
 		"active":   0,
@@ -1016,7 +1040,23 @@ func (s *Server) managerListUsers(c *gin.Context) {
 			summary["shuaka"] = summary["shuaka"].(int) + 1
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"items": users, "summary": summary})
+	items := make([]gin.H, 0, len(users))
+	for _, user := range users {
+		isExpired := user.ExpiresAt == nil || !user.ExpiresAt.After(now)
+		items = append(items, gin.H{
+			"id":         user.ID,
+			"account_no": user.AccountNo,
+			"manager_id": user.ManagerID,
+			"user_type":  models.NormalizeUserType(user.UserType),
+			"status":     user.Status,
+			"is_expired": isExpired,
+			"expires_at": user.ExpiresAt,
+			"created_by": user.CreatedBy,
+			"created_at": user.CreatedAt,
+			"updated_at": user.UpdatedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "summary": summary})
 }
 
 func (s *Server) managerOverview(c *gin.Context) {

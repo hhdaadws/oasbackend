@@ -10,7 +10,7 @@
 
     <template v-else>
       <el-tabs v-model="activeTab" class="module-tabs">
-        <el-tab-pane label="总览与发码" name="overview">
+        <el-tab-pane label="总览" name="overview">
       <section class="panel-card">
         <div class="panel-headline">
           <h3>运营总览</h3>
@@ -47,6 +47,30 @@
       <section class="panel-grid panel-grid--manager">
         <article class="panel-card panel-card--highlight">
           <div class="panel-headline">
+            <h3>管理员账号状态</h3>
+            <el-tag :type="statusTagType(managerProfile.status)">{{ managerProfile.status || "-" }}</el-tag>
+          </div>
+          <div class="stats-grid">
+            <div class="stat-item">
+              <span class="stat-label">账号</span>
+              <strong class="stat-value">{{ managerProfile.username || "-" }}</strong>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">到期时间</span>
+              <strong class="stat-value stat-time">{{ managerProfile.expires_at || "-" }}</strong>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">是否过期</span>
+              <strong class="stat-value">{{ managerProfile.expired ? "是" : "否" }}</strong>
+            </div>
+          </div>
+          <div class="row-actions" style="margin-top: 10px;">
+            <el-button plain :loading="loading.profile" @click="loadManagerProfile">刷新账号状态</el-button>
+          </div>
+        </article>
+
+        <article class="panel-card panel-card--compact">
+          <div class="panel-headline">
             <h3>管理员续费</h3>
             <el-tag type="warning">续费秘钥</el-tag>
           </div>
@@ -58,51 +82,34 @@
               <el-button type="success" :loading="loading.redeem" @click="redeemRenewalKey">兑换续费</el-button>
             </el-form-item>
           </el-form>
-        </article>
-
-        <article class="panel-card panel-card--compact">
-          <div class="panel-headline">
-            <h3>激活码与快速建号</h3>
-            <el-button text type="primary" :loading="loading.users" @click="loadUsers">刷新下属</el-button>
-          </div>
-
-          <el-form :model="activationForm" inline>
-            <el-form-item label="激活天数">
-              <el-input-number v-model="activationForm.duration_days" :min="1" :max="3650" />
-            </el-form-item>
-            <el-form-item label="类型">
-              <el-select v-model="activationForm.user_type" style="width: 130px">
-                <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
-              </el-select>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="loading.activation" @click="createActivationCode">生成激活码</el-button>
-            </el-form-item>
-          </el-form>
-          <el-alert v-if="latestActivationCode" :closable="false" type="success" :title="`激活码：${latestActivationCode}（${userTypeLabel(latestActivationType)}）`" />
-
-          <el-divider />
-
-          <el-form :model="quickForm" inline>
-            <el-form-item label="建号天数">
-              <el-input-number v-model="quickForm.duration_days" :min="1" :max="3650" />
-            </el-form-item>
-            <el-form-item label="类型">
-              <el-select v-model="quickForm.user_type" style="width: 130px">
-                <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
-              </el-select>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="warning" :loading="loading.quickCreate" @click="quickCreateUser">快速创建下属</el-button>
-            </el-form-item>
-          </el-form>
-          <el-alert v-if="quickCreatedAccount" :closable="false" type="info" :title="`新建账号：${quickCreatedAccount}（${userTypeLabel(quickCreatedUserType)}）`" />
+          <p class="tip-text">激活码发放请到“激活码管理”，快速建号请到“下属配置”。</p>
         </article>
       </section>
 
       </el-tab-pane>
 
       <el-tab-pane label="激活码管理" name="codes">
+      <section class="panel-card panel-card--highlight">
+        <div class="panel-headline">
+          <h3>生成激活码</h3>
+          <el-tag type="warning">按类型发码</el-tag>
+        </div>
+        <el-form :model="activationForm" inline>
+          <el-form-item label="激活天数">
+            <el-input-number v-model="activationForm.duration_days" :min="1" :max="3650" />
+          </el-form-item>
+          <el-form-item label="类型">
+            <el-select v-model="activationForm.user_type" style="width: 130px">
+              <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="loading.activation" @click="createActivationCode">生成激活码</el-button>
+          </el-form-item>
+        </el-form>
+        <el-alert v-if="latestActivationCode" :closable="false" type="success" :title="`激活码：${latestActivationCode}（${userTypeLabel(latestActivationType)}）`" />
+      </section>
+
       <section class="panel-card panel-card--compact">
         <div class="panel-headline">
           <h3>激活码管理</h3>
@@ -195,6 +202,32 @@
       </el-tab-pane>
 
       <el-tab-pane label="下属配置" name="users">
+      <section class="panel-card panel-card--highlight">
+        <div class="panel-headline">
+          <h3>快速创建下属账号</h3>
+          <el-tag type="warning">独立模块</el-tag>
+        </div>
+        <el-form :model="quickForm" inline>
+          <el-form-item label="建号天数">
+            <el-input-number v-model="quickForm.duration_days" :min="1" :max="3650" />
+          </el-form-item>
+          <el-form-item label="类型">
+            <el-select v-model="quickForm.user_type" style="width: 130px">
+              <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="warning" :loading="loading.quickCreate" @click="quickCreateUser">快速创建下属</el-button>
+          </el-form-item>
+        </el-form>
+        <el-alert
+          v-if="quickCreatedAccount"
+          :closable="false"
+          type="info"
+          :title="`新建账号：${quickCreatedAccount}（${userTypeLabel(quickCreatedUserType)}）`"
+        />
+      </section>
+
       <section class="panel-card">
         <div class="panel-headline">
           <h3>下属用户列表</h3>
@@ -389,6 +422,7 @@ const props = defineProps({
 defineEmits(["logout"]);
 
 const loading = reactive({
+  profile: false,
   redeem: false,
   activation: false,
   quickCreate: false,
@@ -439,6 +473,14 @@ const activationSummary = reactive({
   unused: 0,
   used: 0,
   revoked: 0,
+});
+
+const managerProfile = reactive({
+  id: 0,
+  username: "",
+  status: "",
+  expires_at: "",
+  expired: false,
 });
 
 const userSummary = reactive({
@@ -544,10 +586,15 @@ watch(
       selectedUserType.value = "daily";
       selectedTaskConfigRaw.value = "{}";
       selectedUserLogs.value = [];
+      managerProfile.id = 0;
+      managerProfile.username = "";
+      managerProfile.status = "";
+      managerProfile.expires_at = "";
+      managerProfile.expired = false;
       return;
     }
     await ensureTaskTemplates("daily");
-    await Promise.all([loadUsers(), loadOverview(), loadActivationCodes()]);
+    await Promise.all([loadManagerProfile(), loadUsers(), loadOverview(), loadActivationCodes()]);
   },
   { immediate: true },
 );
@@ -555,7 +602,7 @@ watch(
 onMounted(async () => {
   if (props.token) {
     await ensureTaskTemplates("daily");
-    await Promise.all([loadUsers(), loadOverview(), loadActivationCodes()]);
+    await Promise.all([loadManagerProfile(), loadUsers(), loadOverview(), loadActivationCodes()]);
   }
 });
 
@@ -640,6 +687,22 @@ async function ensureTaskTemplates(userType) {
   }
 }
 
+async function loadManagerProfile() {
+  loading.profile = true;
+  try {
+    const response = await managerApi.me(props.token);
+    managerProfile.id = response.id || 0;
+    managerProfile.username = response.username || "";
+    managerProfile.status = response.status || "";
+    managerProfile.expires_at = response.expires_at || "";
+    managerProfile.expired = response.expired === true;
+  } catch (error) {
+    ElMessage.error(parseApiError(error));
+  } finally {
+    loading.profile = false;
+  }
+}
+
 async function redeemRenewalKey() {
   const code = redeemForm.code.trim();
   if (!code) {
@@ -651,6 +714,7 @@ async function redeemRenewalKey() {
     await managerApi.redeemRenewalKey(props.token, { code });
     ElMessage.success("管理员续费成功");
     redeemForm.code = "";
+    await loadManagerProfile();
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
