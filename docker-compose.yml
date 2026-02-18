@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: oas-cloud-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: oas
+      POSTGRES_PASSWORD: oas_password
+      POSTGRES_DB: oas_cloud
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oas -d oas_cloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  redis:
+    image: redis:7-alpine
+    container_name: oas-cloud-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oas-cloud-backend
+    restart: unless-stopped
+    environment:
+      ADDR: ":8080"
+      DATABASE_URL: "postgres://oas:oas_password@postgres:5432/oas_cloud?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_KEY_PREFIX: "oas:cloud"
+      JWT_SECRET: "replace-with-strong-secret"
+      JWT_TTL: "24h"
+      AGENT_JWT_TTL: "12h"
+      USER_TOKEN_TTL: "4320h"
+      DEFAULT_LEASE_SECONDS: "90"
+      MAX_POLL_LIMIT: "20"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: oas-cloud-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8088:80"
+
+volumes:
+  postgres_data:
+  redis_data:
