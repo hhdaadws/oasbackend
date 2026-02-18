@@ -97,6 +97,9 @@ func (s *Server) mountRoutes() {
 		superGroup.GET("/managers", s.superListManagers)
 		superGroup.PATCH("/managers/:id/status", s.superPatchManagerStatus)
 		superGroup.PATCH("/managers/:id/lifecycle", s.superPatchManagerLifecycle)
+		superGroup.POST("/managers/batch-lifecycle", s.superBatchManagerLifecycle)
+		superGroup.POST("/managers/batch-status", s.superBatchManagerStatus)
+		superGroup.POST("/manager-renewal-keys/batch-revoke", s.superBatchRevokeRenewalKeys)
 	}
 
 	managerAuthGroup := api.Group("/manager")
@@ -121,6 +124,9 @@ func (s *Server) mountRoutes() {
 		managerGroup.GET("/users/:user_id/tasks", s.managerGetUserTasks)
 		managerGroup.PUT("/users/:user_id/tasks", s.managerPutUserTasks)
 		managerGroup.GET("/users/:user_id/logs", s.managerGetUserLogs)
+		managerGroup.POST("/users/batch-lifecycle", s.managerBatchUserLifecycle)
+		managerGroup.POST("/users/batch-assets", s.managerBatchUserAssets)
+		managerGroup.POST("/activation-codes/batch-revoke", s.managerBatchRevokeActivationCodes)
 	}
 
 	userGroup := api.Group("/user")
@@ -381,22 +387,28 @@ func (s *Server) superCreateManagerRenewalKey(c *gin.Context) {
 func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
 	status := strings.TrimSpace(c.Query("status"))
 	keyword := strings.TrimSpace(c.Query("keyword"))
-	limit := readQueryInt(c, "limit", 200, 1, 2000)
+	pg := readPagination(c, 50, 200)
 	if status != "" && !isCodeStatus(status) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
 		return
 	}
 
-	query := s.db.Model(&models.ManagerRenewalKey{}).Order("id desc").Limit(limit)
+	baseQuery := s.db.Model(&models.ManagerRenewalKey{})
 	if status != "" {
-		query = query.Where("status = ?", status)
+		baseQuery = baseQuery.Where("status = ?", status)
 	}
 	if keyword != "" {
-		query = query.Where("code LIKE ?", "%"+keyword+"%")
+		baseQuery = baseQuery.Where("code LIKE ?", "%"+keyword+"%")
+	}
+
+	var filteredTotal int64
+	if err := baseQuery.Count(&filteredTotal).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to count renewal keys"})
+		return
 	}
 
 	var keys []models.ManagerRenewalKey
-	if err := query.Find(&keys).Error; err != nil {
+	if err := baseQuery.Order("id desc").Offset(pg.Offset).Limit(pg.PageSize).Find(&keys).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query renewal keys"})
 		return
 	}
@@ -461,58 +473,57 @@ func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
 			"used":    usedCount,
 			"revoked": revokedCount,
 		},
+		"total":     filteredTotal,
+		"page":      pg.Page,
+		"page_size": pg.PageSize,
 	})
 }
 
 func (s *Server) superListManagers(c *gin.Context) {
 	status := strings.TrimSpace(c.Query("status"))
 	keyword := strings.TrimSpace(c.Query("keyword"))
-	limit := readQueryInt(c, "limit", 500, 1, 2000)
+	pg := readPagination(c, 50, 200)
 	if status != "" && !isManagerStatus(status) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
 		return
 	}
 
-	query := s.db.Model(&models.Manager{}).Order("id desc").Limit(limit)
+	baseQuery := s.db.Model(&models.Manager{})
 	if status != "" {
-		query = query.Where("status = ?", status)
+		baseQuery = baseQuery.Where("status = ?", status)
 	}
 	if keyword != "" {
-		query = query.Where("username LIKE ?", "%"+keyword+"%")
+		baseQuery = baseQuery.Where("username LIKE ?", "%"+keyword+"%")
+	}
+
+	var filteredTotal int64
+	if err := baseQuery.Count(&filteredTotal).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to count managers"})
+		return
 	}
 
 	var managers []models.Manager
-	if err := query.Find(&managers).Error; err != nil {
+	if err := baseQuery.Order("id desc").Offset(pg.Offset).Limit(pg.PageSize).Find(&managers).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query managers"})
 		return
 	}
 
 	now := time.Now().UTC()
 	expiringThreshold := now.Add(7 * 24 * time.Hour)
-	summary := gin.H{
-		"total":       len(managers),
-		"active":      0,
-		"expired":     0,
-		"disabled":    0,
-		"expiring_7d": 0,
-	}
+
+	// Summary counts over full dataset (not paginated)
+	var totalAll, activeAll, expiredAll, disabledAll int64
+	_ = s.db.Model(&models.Manager{}).Count(&totalAll).Error
+	_ = s.db.Model(&models.Manager{}).Where("status = ?", models.ManagerStatusActive).Count(&activeAll).Error
+	_ = s.db.Model(&models.Manager{}).Where("status = ?", models.ManagerStatusExpired).Count(&expiredAll).Error
+	_ = s.db.Model(&models.Manager{}).Where("status = ?", models.ManagerStatusDisabled).Count(&disabledAll).Error
+	var expiring7dAll int64
+	_ = s.db.Model(&models.Manager{}).Where("status = ? AND expires_at > ? AND expires_at < ?", models.ManagerStatusActive, now, expiringThreshold).Count(&expiring7dAll).Error
 
 	items := make([]gin.H, 0, len(managers))
 	for _, manager := range managers {
 		expiresAt := manager.ExpiresAt
 		isExpired := expiresAt == nil || !expiresAt.After(now)
-		if manager.Status == models.ManagerStatusActive {
-			summary["active"] = summary["active"].(int) + 1
-		}
-		if manager.Status == models.ManagerStatusExpired {
-			summary["expired"] = summary["expired"].(int) + 1
-		}
-		if manager.Status == models.ManagerStatusDisabled {
-			summary["disabled"] = summary["disabled"].(int) + 1
-		}
-		if manager.Status == models.ManagerStatusActive && expiresAt != nil && expiresAt.After(now) && expiresAt.Before(expiringThreshold) {
-			summary["expiring_7d"] = summary["expiring_7d"].(int) + 1
-		}
 		items = append(items, gin.H{
 			"id":         manager.ID,
 			"username":   manager.Username,
@@ -523,7 +534,19 @@ func (s *Server) superListManagers(c *gin.Context) {
 			"updated_at": manager.UpdatedAt,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "summary": summary})
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"summary": gin.H{
+			"total":       totalAll,
+			"active":      activeAll,
+			"expired":     expiredAll,
+			"disabled":    disabledAll,
+			"expiring_7d": expiring7dAll,
+		},
+		"total":     filteredTotal,
+		"page":      pg.Page,
+		"page_size": pg.PageSize,
+	})
 }
 
 func (s *Server) superPatchManagerRenewalKeyStatus(c *gin.Context) {
@@ -680,6 +703,148 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "manager lifecycle updated"})
 }
 
+// ── Super batch handlers ──────────────────────────────
+
+func (s *Server) superBatchManagerLifecycle(c *gin.Context) {
+	var req batchManagerLifecycleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least one field must be provided"})
+		return
+	}
+	if req.ExtendDays < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "extend_days must be positive"})
+		return
+	}
+	if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" && !isManagerStatus(rawStatus) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		return
+	}
+
+	var parsedExpires time.Time
+	hasExpires := false
+	if rawExpires := strings.TrimSpace(req.ExpiresAt); rawExpires != "" {
+		parsed, err := parseFlexibleDateTime(rawExpires)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid expires_at format"})
+			return
+		}
+		parsedExpires = parsed
+		hasExpires = true
+	}
+
+	now := time.Now().UTC()
+	actorID := getUint(c, ctxActorIDKey)
+	var updated int64
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var managers []models.Manager
+		if err := tx.Where("id IN ?", req.ManagerIDs).Find(&managers).Error; err != nil {
+			return err
+		}
+		if len(managers) != len(req.ManagerIDs) {
+			return fmt.Errorf("some manager IDs not found")
+		}
+		for _, manager := range managers {
+			updates := map[string]any{"updated_at": now}
+			hasExpiryUpdate := false
+			if hasExpires {
+				updates["expires_at"] = parsedExpires
+				hasExpiryUpdate = true
+			}
+			if req.ExtendDays > 0 {
+				newExpire := extendExpiry(manager.ExpiresAt, req.ExtendDays, now)
+				updates["expires_at"] = newExpire
+				hasExpiryUpdate = true
+			}
+			if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
+				updates["status"] = rawStatus
+			} else if hasExpiryUpdate {
+				if expireTime, ok := updates["expires_at"].(time.Time); ok {
+					if expireTime.After(now) {
+						updates["status"] = models.ManagerStatusActive
+					} else {
+						updates["status"] = models.ManagerStatusExpired
+					}
+				}
+			}
+			if err := tx.Model(&models.Manager{}).Where("id = ?", manager.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+			updated++
+		}
+		return nil
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch update manager lifecycle"})
+		return
+	}
+	s.audit(models.ActorTypeSuper, actorID, "batch_manager_lifecycle", "manager", 0, datatypes.JSONMap{
+		"manager_ids": req.ManagerIDs,
+		"extend_days": req.ExtendDays,
+		"expires_at":  req.ExpiresAt,
+		"status":      req.Status,
+		"updated":     updated,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"updated": updated})
+}
+
+func (s *Server) superBatchManagerStatus(c *gin.Context) {
+	var req batchManagerStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	now := time.Now().UTC()
+	actorID := getUint(c, ctxActorIDKey)
+
+	updates := map[string]any{"status": req.Status, "updated_at": now}
+	if req.Status == models.ManagerStatusExpired {
+		updates["expires_at"] = now
+	}
+
+	result := s.db.Model(&models.Manager{}).Where("id IN ?", req.ManagerIDs).Updates(updates)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch update manager status"})
+		return
+	}
+	s.audit(models.ActorTypeSuper, actorID, "batch_manager_status", "manager", 0, datatypes.JSONMap{
+		"manager_ids": req.ManagerIDs,
+		"status":      req.Status,
+		"updated":     result.RowsAffected,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"updated": result.RowsAffected})
+}
+
+func (s *Server) superBatchRevokeRenewalKeys(c *gin.Context) {
+	var req batchRenewalKeyRevokeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	actorID := getUint(c, ctxActorIDKey)
+
+	result := s.db.Model(&models.ManagerRenewalKey{}).
+		Where("id IN ? AND status = ?", req.KeyIDs, models.CodeStatusUnused).
+		Updates(map[string]any{"status": models.CodeStatusRevoked})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch revoke renewal keys"})
+		return
+	}
+	s.audit(models.ActorTypeSuper, actorID, "batch_revoke_renewal_keys", "manager_renewal_key", 0, datatypes.JSONMap{
+		"key_ids": req.KeyIDs,
+		"revoked": result.RowsAffected,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"revoked": result.RowsAffected, "requested": len(req.KeyIDs)})
+}
+
 func (s *Server) managerRedeemRenewalKey(c *gin.Context) {
 	var req managerRedeemKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -795,7 +960,7 @@ func (s *Server) managerListActivationCodes(c *gin.Context) {
 	status := strings.TrimSpace(c.Query("status"))
 	userType := strings.TrimSpace(c.Query("user_type"))
 	keyword := strings.TrimSpace(c.Query("keyword"))
-	limit := readQueryInt(c, "limit", 200, 1, 2000)
+	pg := readPagination(c, 50, 200)
 
 	if status != "" && !isCodeStatus(status) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
@@ -806,22 +971,26 @@ func (s *Server) managerListActivationCodes(c *gin.Context) {
 		return
 	}
 
-	query := s.db.Model(&models.UserActivationCode{}).
-		Where("manager_id = ?", managerID).
-		Order("id desc").
-		Limit(limit)
+	baseQuery := s.db.Model(&models.UserActivationCode{}).
+		Where("manager_id = ?", managerID)
 	if status != "" {
-		query = query.Where("status = ?", status)
+		baseQuery = baseQuery.Where("status = ?", status)
 	}
 	if userType != "" {
-		query = query.Where("user_type = ?", models.NormalizeUserType(userType))
+		baseQuery = baseQuery.Where("user_type = ?", models.NormalizeUserType(userType))
 	}
 	if keyword != "" {
-		query = query.Where("code LIKE ?", "%"+keyword+"%")
+		baseQuery = baseQuery.Where("code LIKE ?", "%"+keyword+"%")
+	}
+
+	var filteredTotal int64
+	if err := baseQuery.Count(&filteredTotal).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to count activation codes"})
+		return
 	}
 
 	var codes []models.UserActivationCode
-	if err := query.Find(&codes).Error; err != nil {
+	if err := baseQuery.Order("id desc").Offset(pg.Offset).Limit(pg.PageSize).Find(&codes).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query activation codes"})
 		return
 	}
@@ -886,6 +1055,9 @@ func (s *Server) managerListActivationCodes(c *gin.Context) {
 			"used":    usedCount,
 			"revoked": revokedCount,
 		},
+		"total":     filteredTotal,
+		"page":      pg.Page,
+		"page_size": pg.PageSize,
 	})
 }
 
@@ -986,7 +1158,7 @@ func (s *Server) managerListUsers(c *gin.Context) {
 	status := strings.TrimSpace(c.Query("status"))
 	userType := strings.TrimSpace(c.Query("user_type"))
 	keyword := strings.TrimSpace(c.Query("keyword"))
-	limit := readQueryInt(c, "limit", 800, 1, 5000)
+	pg := readPagination(c, 50, 200)
 	if status != "" && !isUserStatus(status) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
 		return
@@ -996,58 +1168,52 @@ func (s *Server) managerListUsers(c *gin.Context) {
 		return
 	}
 
-	query := s.db.Where("manager_id = ?", managerID).Order("id asc").Limit(limit)
+	baseQuery := s.db.Model(&models.User{}).Where("manager_id = ?", managerID)
 	if status != "" {
-		query = query.Where("status = ?", status)
+		baseQuery = baseQuery.Where("status = ?", status)
 	}
 	if userType != "" {
-		query = query.Where("user_type = ?", models.NormalizeUserType(userType))
+		baseQuery = baseQuery.Where("user_type = ?", models.NormalizeUserType(userType))
 	}
 	if keyword != "" {
-		query = query.Where("account_no LIKE ?", "%"+keyword+"%")
+		baseQuery = baseQuery.Where("account_no LIKE ?", "%"+keyword+"%")
 	}
+
+	var filteredTotal int64
+	if err := baseQuery.Count(&filteredTotal).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to count users"})
+		return
+	}
+
 	var users []models.User
-	if err := query.Find(&users).Error; err != nil {
+	if err := baseQuery.Order("id asc").Offset(pg.Offset).Limit(pg.PageSize).Find(&users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query users"})
 		return
 	}
+
 	now := time.Now().UTC()
-	summary := gin.H{
-		"total":    len(users),
-		"active":   0,
-		"expired":  0,
-		"disabled": 0,
-		"daily":    0,
-		"duiyi":    0,
-		"shuaka":   0,
-	}
-	for index := range users {
-		users[index].UserType = models.NormalizeUserType(users[index].UserType)
-		switch users[index].Status {
-		case models.UserStatusActive:
-			summary["active"] = summary["active"].(int) + 1
-		case models.UserStatusExpired:
-			summary["expired"] = summary["expired"].(int) + 1
-		case models.UserStatusDisabled:
-			summary["disabled"] = summary["disabled"].(int) + 1
-		}
-		switch users[index].UserType {
-		case models.UserTypeDaily:
-			summary["daily"] = summary["daily"].(int) + 1
-		case models.UserTypeDuiyi:
-			summary["duiyi"] = summary["duiyi"].(int) + 1
-		case models.UserTypeShuaka:
-			summary["shuaka"] = summary["shuaka"].(int) + 1
-		}
-	}
+
+	// Summary counts over full dataset (not paginated)
+	var totalAll, activeAll, expiredAll, disabledAll int64
+	mgBase := s.db.Model(&models.User{}).Where("manager_id = ?", managerID)
+	_ = mgBase.Count(&totalAll).Error
+	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, models.UserStatusActive).Count(&activeAll).Error
+	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, models.UserStatusExpired).Count(&expiredAll).Error
+	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, models.UserStatusDisabled).Count(&disabledAll).Error
+	var dailyAll, duiyiAll, shuakaAll int64
+	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND user_type = ?", managerID, models.UserTypeDaily).Count(&dailyAll).Error
+	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND user_type = ?", managerID, models.UserTypeDuiyi).Count(&duiyiAll).Error
+	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND user_type = ?", managerID, models.UserTypeShuaka).Count(&shuakaAll).Error
+
 	items := make([]gin.H, 0, len(users))
 	for _, user := range users {
+		user.UserType = models.NormalizeUserType(user.UserType)
 		isExpired := user.ExpiresAt == nil || !user.ExpiresAt.After(now)
 		items = append(items, gin.H{
 			"id":         user.ID,
 			"account_no": user.AccountNo,
 			"manager_id": user.ManagerID,
-			"user_type":  models.NormalizeUserType(user.UserType),
+			"user_type":  user.UserType,
 			"status":     user.Status,
 			"is_expired": isExpired,
 			"expires_at": user.ExpiresAt,
@@ -1056,7 +1222,21 @@ func (s *Server) managerListUsers(c *gin.Context) {
 			"updated_at": user.UpdatedAt,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "summary": summary})
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"summary": gin.H{
+			"total":    totalAll,
+			"active":   activeAll,
+			"expired":  expiredAll,
+			"disabled": disabledAll,
+			"daily":    dailyAll,
+			"duiyi":    duiyiAll,
+			"shuaka":   shuakaAll,
+		},
+		"total":     filteredTotal,
+		"page":      pg.Page,
+		"page_size": pg.PageSize,
+	})
 }
 
 func (s *Server) managerOverview(c *gin.Context) {
@@ -1329,13 +1509,192 @@ func (s *Server) managerGetUserLogs(c *gin.Context) {
 	if !s.managerOwnsUser(c, managerID, userID) {
 		return
 	}
-	limit := readQueryInt(c, "limit", 50, 1, 200)
-	items, err := s.queryUserLogs(managerID, userID, limit)
+	pg := readPagination(c, 50, 200)
+	items, total, err := s.queryUserLogsPaginated(managerID, userID, pg)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query logs"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	c.JSON(http.StatusOK, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      pg.Page,
+		"page_size": pg.PageSize,
+	})
+}
+
+// ── Manager batch handlers ────────────────────────────
+
+func (s *Server) managerBatchUserLifecycle(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	var req batchUserLifecycleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least one field must be provided"})
+		return
+	}
+	if req.ExtendDays < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "extend_days must be positive"})
+		return
+	}
+	if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
+		if rawStatus != models.UserStatusActive && rawStatus != models.UserStatusExpired && rawStatus != models.UserStatusDisabled {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+			return
+		}
+	}
+
+	var parsedExpires time.Time
+	hasExpires := false
+	if rawExpires := strings.TrimSpace(req.ExpiresAt); rawExpires != "" {
+		parsed, err := parseFlexibleDateTime(rawExpires)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid expires_at format"})
+			return
+		}
+		parsedExpires = parsed
+		hasExpires = true
+	}
+
+	now := time.Now().UTC()
+	var updated int64
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var users []models.User
+		if err := tx.Where("id IN ? AND manager_id = ?", req.UserIDs, managerID).Find(&users).Error; err != nil {
+			return err
+		}
+		if len(users) != len(req.UserIDs) {
+			return fmt.Errorf("some user IDs not found or not owned by this manager")
+		}
+		for _, user := range users {
+			updates := map[string]any{"updated_at": now}
+			hasExpiryUpdate := false
+			if hasExpires {
+				updates["expires_at"] = parsedExpires
+				hasExpiryUpdate = true
+			}
+			if req.ExtendDays > 0 {
+				newExpire := extendExpiry(user.ExpiresAt, req.ExtendDays, now)
+				updates["expires_at"] = newExpire
+				hasExpiryUpdate = true
+			}
+			if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
+				updates["status"] = rawStatus
+			} else if hasExpiryUpdate {
+				if expireTime, ok := updates["expires_at"].(time.Time); ok {
+					if expireTime.After(now) {
+						updates["status"] = models.UserStatusActive
+					} else {
+						updates["status"] = models.UserStatusExpired
+					}
+				}
+			}
+			if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+			updated++
+		}
+		return nil
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not owned") {
+			c.JSON(http.StatusForbidden, gin.H{"detail": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch update user lifecycle"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "batch_user_lifecycle", "user", 0, datatypes.JSONMap{
+		"user_ids":    req.UserIDs,
+		"extend_days": req.ExtendDays,
+		"expires_at":  req.ExpiresAt,
+		"status":      req.Status,
+		"updated":     updated,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"updated": updated})
+}
+
+func (s *Server) managerBatchUserAssets(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	var req batchUserAssetsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	for key := range req.Assets {
+		if err := taskmeta.ValidateAssetKey(key); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+	}
+
+	now := time.Now().UTC()
+	var updated int64
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var users []models.User
+		if err := tx.Where("id IN ? AND manager_id = ?", req.UserIDs, managerID).Find(&users).Error; err != nil {
+			return err
+		}
+		if len(users) != len(req.UserIDs) {
+			return fmt.Errorf("some user IDs not found or not owned by this manager")
+		}
+		for _, user := range users {
+			base := deepMergeMap(taskmeta.BuildDefaultUserAssets(), map[string]any(user.Assets))
+			for key, value := range req.Assets {
+				base[key] = taskmeta.ParseAssetInt(value, taskmeta.ParseAssetInt(base[key], 0))
+			}
+			if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+				"assets":     datatypes.JSONMap(base),
+				"updated_at": now,
+			}).Error; err != nil {
+				return err
+			}
+			updated++
+		}
+		return nil
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not owned") {
+			c.JSON(http.StatusForbidden, gin.H{"detail": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch update user assets"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "batch_user_assets", "user", 0, datatypes.JSONMap{
+		"user_ids": req.UserIDs,
+		"assets":   req.Assets,
+		"updated":  updated,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"updated": updated})
+}
+
+func (s *Server) managerBatchRevokeActivationCodes(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	var req batchCodeRevokeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	result := s.db.Model(&models.UserActivationCode{}).
+		Where("id IN ? AND manager_id = ? AND status = ?", req.CodeIDs, managerID, models.CodeStatusUnused).
+		Updates(map[string]any{"status": models.CodeStatusRevoked})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch revoke activation codes"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "batch_revoke_activation_codes", "user_activation_code", 0, datatypes.JSONMap{
+		"code_ids": req.CodeIDs,
+		"revoked":  result.RowsAffected,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"revoked": result.RowsAffected, "requested": len(req.CodeIDs)})
 }
 
 func (s *Server) userRegisterByCode(c *gin.Context) {
@@ -1636,13 +1995,18 @@ func (s *Server) userPutMeTasks(c *gin.Context) {
 func (s *Server) userGetMeLogs(c *gin.Context) {
 	userID := getUint(c, ctxUserIDKey)
 	managerID := getUint(c, ctxManagerIDKey)
-	limit := readQueryInt(c, "limit", 50, 1, 200)
-	items, err := s.queryUserLogs(managerID, userID, limit)
+	pg := readPagination(c, 50, 200)
+	items, total, err := s.queryUserLogsPaginated(managerID, userID, pg)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query logs"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	c.JSON(http.StatusOK, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      pg.Page,
+		"page_size": pg.PageSize,
+	})
 }
 
 func (s *Server) agentLogin(c *gin.Context) {
@@ -2133,22 +2497,21 @@ func (s *Server) ensureTaskConfigForTypeTx(tx *gorm.DB, userID uint, userType st
 	}).Error
 }
 
-func (s *Server) queryUserLogs(managerID, userID uint, limit int) ([]gin.H, error) {
-	var jobs []models.TaskJob
-	if err := s.db.Where("manager_id = ? AND user_id = ?", managerID, userID).Order("id desc").Limit(limit).Find(&jobs).Error; err != nil {
-		return nil, err
+func (s *Server) queryUserLogsPaginated(managerID, userID uint, pg paginationParams) ([]gin.H, int64, error) {
+	baseQuery := s.db.Model(&models.TaskJobEvent{}).
+		Joins("JOIN task_jobs ON task_jobs.id = task_job_events.job_id").
+		Where("task_jobs.manager_id = ? AND task_jobs.user_id = ?", managerID, userID)
+
+	var total int64
+	if err := baseQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
-	if len(jobs) == 0 {
-		return []gin.H{}, nil
-	}
-	ids := make([]uint, 0, len(jobs))
-	for _, j := range jobs {
-		ids = append(ids, j.ID)
-	}
+
 	var events []models.TaskJobEvent
-	if err := s.db.Where("job_id IN ?", ids).Order("event_at desc").Limit(limit * 3).Find(&events).Error; err != nil {
-		return nil, err
+	if err := baseQuery.Order("task_job_events.event_at desc").Offset(pg.Offset).Limit(pg.PageSize).Find(&events).Error; err != nil {
+		return nil, 0, err
 	}
+
 	result := make([]gin.H, 0, len(events))
 	for _, e := range events {
 		result = append(result, gin.H{
@@ -2159,7 +2522,7 @@ func (s *Server) queryUserLogs(managerID, userID uint, limit int) ([]gin.H, erro
 			"event_at":   e.EventAt,
 		})
 	}
-	return result, nil
+	return result, total, nil
 }
 
 func isCodeStatus(status string) bool {
@@ -2196,6 +2559,22 @@ func parseUintParam(c *gin.Context, key string) (uint, bool) {
 		return 0, false
 	}
 	return uint(id), true
+}
+
+type paginationParams struct {
+	Page     int
+	PageSize int
+	Offset   int
+}
+
+func readPagination(c *gin.Context, defaultPageSize, maxPageSize int) paginationParams {
+	page := readQueryInt(c, "page", 1, 1, 100000)
+	pageSize := readQueryInt(c, "page_size", defaultPageSize, 1, maxPageSize)
+	return paginationParams{
+		Page:     page,
+		PageSize: pageSize,
+		Offset:   (page - 1) * pageSize,
+	}
 }
 
 func readQueryInt(c *gin.Context, key string, fallback, minValue, maxValue int) int {

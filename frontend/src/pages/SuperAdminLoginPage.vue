@@ -2,7 +2,7 @@
   <div class="page-shell page-shell--login">
     <header class="console-header glass-card stagger-1">
       <div class="brand">
-        <p class="eyebrow">Super Admin Auth</p>
+        <p class="eyebrow">超级管理员认证</p>
         <h1>超级管理员登录</h1>
         <p class="subtitle">
           该页面用于超管初始化与登录；登录成功后将自动跳转到超级管理员管理后台。
@@ -18,9 +18,9 @@
             {{ bootstrapInitialized ? "已初始化" : "未初始化" }}
           </el-tag>
         </div>
-        <el-form :model="superForm" label-width="90px" class="compact-form">
+        <el-form :model="superForm" label-width="100px" class="compact-form">
           <el-form-item label="账号">
-            <el-input v-model="superForm.username" class="auth-input" placeholder="super_admin" />
+            <el-input v-model="superForm.username" class="auth-input" placeholder="账号示例：super_admin" />
           </el-form-item>
           <el-form-item label="密码">
             <el-input v-model="superForm.password" class="auth-input" type="password" show-password />

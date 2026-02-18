@@ -13,12 +13,12 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import LoginPage from "./pages/LoginPage.vue";
-import ManagerPage from "./pages/ManagerPage.vue";
-import SuperAdminLoginPage from "./pages/SuperAdminLoginPage.vue";
-import SuperAdminPage from "./pages/SuperAdminPage.vue";
-import UserPage from "./pages/UserPage.vue";
+const ManagerPage = defineAsyncComponent(() => import("./pages/ManagerPage.vue"));
+const UserPage = defineAsyncComponent(() => import("./pages/UserPage.vue"));
+const SuperAdminLoginPage = defineAsyncComponent(() => import("./pages/SuperAdminLoginPage.vue"));
+const SuperAdminPage = defineAsyncComponent(() => import("./pages/SuperAdminPage.vue"));
 import { getSession } from "./lib/session";
 
 const ROUTES = new Set(["/login", "/manager", "/user", "/super-admin-login", "/super-admin"]);

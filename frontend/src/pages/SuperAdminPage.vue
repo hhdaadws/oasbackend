@@ -2,7 +2,7 @@
   <div class="page-shell">
     <header class="console-header glass-card stagger-1">
       <div class="brand">
-        <p class="eyebrow">Super Admin Workspace</p>
+        <p class="eyebrow">超级管理员工作台</p>
         <h1>超级管理员管理后台</h1>
         <p class="subtitle">统一管理管理员生命周期、续费秘钥状态和治理策略。</p>
       </div>
@@ -19,7 +19,7 @@
 </template>
 
 <script setup>
-import SuperPanel from "../components/SuperPanel.vue";
+import SuperPanel from "../components/super/SuperPanel.vue";
 import { clearSuperToken } from "../lib/session";
 
 defineProps({

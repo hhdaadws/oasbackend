@@ -95,6 +95,27 @@ export const superApi = {
       data: payload,
       headers: withBearer(token),
     }),
+  batchManagerLifecycle: (token, payload) =>
+    request({
+      method: "POST",
+      url: "/super/managers/batch-lifecycle",
+      data: payload,
+      headers: withBearer(token),
+    }),
+  batchManagerStatus: (token, payload) =>
+    request({
+      method: "POST",
+      url: "/super/managers/batch-status",
+      data: payload,
+      headers: withBearer(token),
+    }),
+  batchRevokeRenewalKeys: (token, payload) =>
+    request({
+      method: "POST",
+      url: "/super/manager-renewal-keys/batch-revoke",
+      data: payload,
+      headers: withBearer(token),
+    }),
 };
 
 export const managerApi = {
@@ -189,11 +210,32 @@ export const managerApi = {
       data: payload,
       headers: withBearer(token),
     }),
-  getUserLogs: (token, userId, limit = 50) =>
+  getUserLogs: (token, userId, params = {}) =>
     request({
       method: "GET",
       url: `/manager/users/${userId}/logs`,
-      params: { limit },
+      params,
+      headers: withBearer(token),
+    }),
+  batchUserLifecycle: (token, payload) =>
+    request({
+      method: "POST",
+      url: "/manager/users/batch-lifecycle",
+      data: payload,
+      headers: withBearer(token),
+    }),
+  batchUserAssets: (token, payload) =>
+    request({
+      method: "POST",
+      url: "/manager/users/batch-assets",
+      data: payload,
+      headers: withBearer(token),
+    }),
+  batchRevokeActivationCodes: (token, payload) =>
+    request({
+      method: "POST",
+      url: "/manager/activation-codes/batch-revoke",
+      data: payload,
       headers: withBearer(token),
     }),
 };
@@ -242,11 +284,11 @@ export const userApi = {
       data: payload,
       headers: withBearer(token),
     }),
-  getMeLogs: (token, limit = 50) =>
+  getMeLogs: (token, params = {}) =>
     request({
       method: "GET",
       url: "/user/me/logs",
-      params: { limit },
+      params,
       headers: withBearer(token),
     }),
 };

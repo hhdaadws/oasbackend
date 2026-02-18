@@ -2,7 +2,7 @@
   <div class="page-shell">
     <header class="console-header glass-card stagger-1">
       <div class="brand">
-        <p class="eyebrow">Manager Workspace</p>
+        <p class="eyebrow">管理员工作台</p>
         <h1>管理员页面</h1>
         <p class="subtitle">管理下属用户、发放激活码、配置任务并查看执行日志。</p>
       </div>
@@ -19,7 +19,7 @@
 </template>
 
 <script setup>
-import ManagerPanel from "../components/ManagerPanel.vue";
+import ManagerPanel from "../components/manager/ManagerPanel.vue";
 import { clearManagerToken } from "../lib/session";
 
 defineProps({

@@ -92,3 +92,37 @@ type agentJobUpdateRequest struct {
 	ErrorCode    string `json:"error_code"`
 	LeaseSeconds int    `json:"lease_seconds"`
 }
+
+// ── Batch request types ───────────────────────────────
+
+type batchUserLifecycleRequest struct {
+	UserIDs    []uint `json:"user_ids" binding:"required,min=1,max=500"`
+	ExpiresAt  string `json:"expires_at"`
+	ExtendDays int    `json:"extend_days"`
+	Status     string `json:"status"`
+}
+
+type batchUserAssetsRequest struct {
+	UserIDs []uint         `json:"user_ids" binding:"required,min=1,max=500"`
+	Assets  map[string]any `json:"assets" binding:"required"`
+}
+
+type batchCodeRevokeRequest struct {
+	CodeIDs []uint `json:"code_ids" binding:"required,min=1,max=500"`
+}
+
+type batchManagerLifecycleRequest struct {
+	ManagerIDs []uint `json:"manager_ids" binding:"required,min=1,max=200"`
+	ExpiresAt  string `json:"expires_at"`
+	ExtendDays int    `json:"extend_days"`
+	Status     string `json:"status"`
+}
+
+type batchManagerStatusRequest struct {
+	ManagerIDs []uint `json:"manager_ids" binding:"required,min=1,max=200"`
+	Status     string `json:"status" binding:"required,oneof=active expired disabled"`
+}
+
+type batchRenewalKeyRevokeRequest struct {
+	KeyIDs []uint `json:"key_ids" binding:"required,min=1,max=500"`
+}

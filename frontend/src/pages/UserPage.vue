@@ -2,7 +2,7 @@
   <div class="page-shell">
     <header class="console-header glass-card stagger-1">
       <div class="brand">
-        <p class="eyebrow">User Workspace</p>
+        <p class="eyebrow">用户工作台</p>
         <h1>普通用户页面</h1>
         <p class="subtitle">管理个人任务开关与执行时间，查看自己的任务执行日志。</p>
       </div>
@@ -23,7 +23,7 @@
 </template>
 
 <script setup>
-import UserPanel from "../components/UserPanel.vue";
+import UserPanel from "../components/user/UserPanel.vue";
 import { clearUserSession } from "../lib/session";
 
 defineProps({

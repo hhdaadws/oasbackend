@@ -2,11 +2,8 @@
   <div class="page-shell page-shell--login">
     <header class="console-header glass-card stagger-1">
       <div class="brand">
-        <p class="eyebrow">Cloud Command Center</p>
+        <p class="eyebrow">云端指令中心</p>
         <h1>OAS 云端登录中心</h1>
-        <p class="subtitle">
-          独立登录页仅提供管理员和普通用户入口。超级管理员页面需手动输入 URL 访问。
-        </p>
       </div>
     </header>
 
@@ -19,9 +16,9 @@
             <el-tag type="success" v-if="session.managerToken">已登录</el-tag>
           </div>
 
-          <el-form :model="managerForm" label-width="90px" class="compact-form">
+          <el-form :model="managerForm" label-width="100px" class="compact-form">
             <el-form-item label="账号">
-              <el-input v-model="managerForm.username" class="auth-input" placeholder="manager_demo" clearable />
+              <el-input v-model="managerForm.username" class="auth-input" placeholder="账号示例：mgr_001" clearable />
             </el-form-item>
             <el-form-item label="密码">
               <el-input v-model="managerForm.password" class="auth-input" type="password" show-password />
@@ -44,9 +41,9 @@
             <el-tag type="success" v-if="session.userToken">已登录</el-tag>
           </div>
 
-          <el-form :model="userForm" label-width="98px" class="compact-form">
+          <el-form :model="userForm" label-width="100px" class="compact-form">
             <el-form-item label="激活码注册">
-              <el-input v-model="userForm.registerCode" class="auth-input" placeholder="uac_xxx" clearable />
+              <el-input v-model="userForm.registerCode" class="auth-input" placeholder="激活码示例：uac_xxx" clearable />
             </el-form-item>
             <el-form-item>
               <el-button type="warning" :loading="loading.userRegister" @click="registerUserByCode">
@@ -57,7 +54,7 @@
             <el-divider />
 
             <el-form-item label="账号登录">
-              <el-input v-model="userForm.accountNo" class="auth-input" placeholder="U2026..." clearable />
+              <el-input v-model="userForm.accountNo" class="auth-input" placeholder="账号示例：U2026..." clearable />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="loading.userLogin" @click="loginUser">登录并进入</el-button>
