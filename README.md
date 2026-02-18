@@ -72,12 +72,10 @@ Scheduler status endpoint:
 
 `docker-compose.yml` is provided for integrated deployment:
 
-- URL: `http://localhost:8088` (frontend)
-- Backend API via nginx reverse proxy: `/api/v1/*`
-- Backend direct health check: `http://localhost:8080/health`
-- Pull images from Docker Hub:
-  - `miku66/oasbackend`
-  - `miku66/oasbackend-frontend`
+- URL: `http://localhost:8080` (frontend + backend in one container)
+- Backend API: `http://localhost:8080/api/v1/*`
+- Backend health check: `http://localhost:8080/health`
+- Pull image from Docker Hub: `miku66/oasbackend`
 
 ```bash
 cp .env.example .env
@@ -90,9 +88,8 @@ docker compose up -d
 Production example with HTTPS + secrets + backup + monitoring:
 
 - Compose file: `deploy/production/docker-compose.prod.yml`
-- GitHub Actions images:
-  - `miku66/oasbackend` (backend)
-  - `miku66/oasbackend-frontend` (frontend)
+- GitHub Actions image:
+  - `miku66/oasbackend` (frontend + backend single image)
   - tags: `latest`, `sha-*`, `v*`
 - Includes:
   - Caddy automatic HTTPS termination

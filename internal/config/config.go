@@ -10,6 +10,8 @@ import (
 
 type Config struct {
 	Addr               string
+	ServeFrontend      bool
+	FrontendDistDir    string
 	DatabaseURL        string
 	RedisAddr          string
 	RedisPassword      string
@@ -30,6 +32,8 @@ type Config struct {
 func Load() Config {
 	return Config{
 		Addr:               getEnv("ADDR", ":8080"),
+		ServeFrontend:      getBoolEnv("SERVE_FRONTEND", true),
+		FrontendDistDir:    getEnv("FRONTEND_DIST_DIR", "/app/web"),
 		DatabaseURL:        getEnvOrFile("DATABASE_URL", "DATABASE_URL_FILE", "postgres://postgres:postgres@127.0.0.1:5432/oas_cloud?sslmode=disable"),
 		RedisAddr:          getEnv("REDIS_ADDR", "127.0.0.1:6379"),
 		RedisPassword:      getEnvOrFile("REDIS_PASSWORD", "REDIS_PASSWORD_FILE", ""),

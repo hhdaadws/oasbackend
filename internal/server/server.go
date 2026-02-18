@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -120,6 +122,8 @@ func (s *Server) mountRoutes() {
 		agentGroup.POST("/jobs/:job_id/complete", s.agentJobComplete)
 		agentGroup.POST("/jobs/:job_id/fail", s.agentJobFail)
 	}
+
+	s.mountFrontendRoutes()
 }
 
 func (s *Server) schedulerStatus(c *gin.Context) {
@@ -144,6 +148,37 @@ func (s *Server) superConsole(c *gin.Context) {
 		return
 	}
 	c.Data(http.StatusOK, "text/html; charset=utf-8", content)
+}
+
+func (s *Server) mountFrontendRoutes() {
+	if !s.cfg.ServeFrontend {
+		return
+	}
+	distDir := strings.TrimSpace(s.cfg.FrontendDistDir)
+	if distDir == "" {
+		return
+	}
+	indexPath := filepath.Join(distDir, "index.html")
+	if _, err := os.Stat(indexPath); err != nil {
+		return
+	}
+
+	assetsPath := filepath.Join(distDir, "assets")
+	if stat, err := os.Stat(assetsPath); err == nil && stat.IsDir() {
+		s.router.Static("/assets", assetsPath)
+	}
+	s.router.GET("/", func(c *gin.Context) {
+		c.File(indexPath)
+	})
+
+	s.router.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api/") || path == "/health" || strings.HasPrefix(path, "/super/") {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+			return
+		}
+		c.File(indexPath)
+	})
 }
 
 func (s *Server) bootstrapStatus(c *gin.Context) {
