@@ -15,6 +15,7 @@ import (
 	"oas-cloud-go/internal/cache"
 	"oas-cloud-go/internal/config"
 	"oas-cloud-go/internal/models"
+	"oas-cloud-go/internal/scheduler"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
@@ -28,18 +29,23 @@ var staticFS embed.FS
 type Server struct {
 	cfg          config.Config
 	db           *gorm.DB
-	redisStore   *cache.RedisStore
+	redisStore   cache.Store
+	generator    *scheduler.Generator
 	tokenManager *auth.TokenManager
 	router       *gin.Engine
 }
 
-func New(cfg config.Config, db *gorm.DB, redisStore *cache.RedisStore) *Server {
+func New(cfg config.Config, db *gorm.DB, redisStore cache.Store) *Server {
 	app := &Server{
 		cfg:          cfg,
 		db:           db,
 		redisStore:   redisStore,
 		tokenManager: auth.NewTokenManager(cfg.JWTSecret),
 		router:       gin.New(),
+	}
+	if cfg.SchedulerEnabled {
+		app.generator = scheduler.NewGenerator(cfg, db, redisStore)
+		app.generator.Start()
 	}
 	app.router.Use(gin.Logger(), gin.Recovery())
 	app.mountRoutes()
@@ -66,6 +72,7 @@ func (s *Server) mountRoutes() {
 	api := s.router.Group("/api/v1")
 	{
 		api.GET("/bootstrap/status", s.bootstrapStatus)
+		api.GET("/scheduler/status", s.schedulerStatus)
 		api.POST("/bootstrap/init", s.bootstrapInit)
 		api.POST("/super/auth/login", s.superLogin)
 		api.POST("/manager/auth/register", s.managerRegister)
@@ -113,6 +120,21 @@ func (s *Server) mountRoutes() {
 		agentGroup.POST("/jobs/:job_id/complete", s.agentJobComplete)
 		agentGroup.POST("/jobs/:job_id/fail", s.agentJobFail)
 	}
+}
+
+func (s *Server) schedulerStatus(c *gin.Context) {
+	if s.generator == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"enabled": false,
+			"status":  "disabled",
+		})
+		return
+	}
+	snapshot := s.generator.Snapshot()
+	c.JSON(http.StatusOK, gin.H{
+		"enabled": true,
+		"status":  snapshot,
+	})
 }
 
 func (s *Server) superConsole(c *gin.Context) {

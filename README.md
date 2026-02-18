@@ -30,20 +30,42 @@ npm run dev
 
 - `ADDR` default `:8080`
 - `DATABASE_URL` PostgreSQL DSN
+- `DATABASE_URL_FILE` read DSN from mounted secret file
 - `REDIS_ADDR` default `127.0.0.1:6379`
 - `REDIS_PASSWORD` default empty
+- `REDIS_PASSWORD_FILE` read redis password from secret file
 - `REDIS_DB` default `0`
 - `REDIS_KEY_PREFIX` default `oas:cloud`
 - `JWT_SECRET` JWT signing secret
+- `JWT_SECRET_FILE` read JWT secret from secret file
 - `JWT_TTL` default `24h`
 - `AGENT_JWT_TTL` default `12h`
 - `USER_TOKEN_TTL` default `4320h`
 - `DEFAULT_LEASE_SECONDS` default `90`
 - `MAX_POLL_LIMIT` default `20`
+- `SCHEDULER_ENABLED` default `true`
+- `SCHEDULER_INTERVAL` default `10s`
+- `SCHEDULER_SCAN_LIMIT` default `500`
+- `SCHEDULER_SLOT_TTL` default `90s`
 
 ## API prefix
 
 All APIs are under `/api/v1`.
+
+## Cloud task generation scheduler
+
+- Built-in scheduler continuously scans active users and `user_task_configs`.
+- `enabled === true` tasks are generated into `task_jobs` automatically.
+- Redis schedule slot dedupe prevents duplicate enqueue in the same window.
+- Open jobs (`pending/leased/running`) are checked before generating new jobs.
+- Task due logic supports:
+  - `next_time` full datetime
+  - `next_time` daily `HH:MM`
+  - no `next_time` fallback rolling generation with dedupe
+
+Scheduler status endpoint:
+
+- `GET /api/v1/scheduler/status`
 
 ## One-command deployment example
 
@@ -56,3 +78,15 @@ All APIs are under `/api/v1`.
 ```bash
 docker compose up -d --build
 ```
+
+## Production deployment stack
+
+Production example with HTTPS + secrets + backup + monitoring:
+
+- Compose file: `deploy/production/docker-compose.prod.yml`
+- GitHub Actions image: `miku66/oasbackend` (tags: `latest`, `sha-*`, `v*`)
+- Includes:
+  - Caddy automatic HTTPS termination
+  - Docker secrets-based credential injection
+  - PostgreSQL backup service
+  - Prometheus + Grafana + exporters monitoring stack

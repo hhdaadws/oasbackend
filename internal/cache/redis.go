@@ -18,6 +18,26 @@ type RedisStore struct {
 	prefix string
 }
 
+type Store interface {
+	Close() error
+	Ping(ctx context.Context) error
+	SaveAgentSession(ctx context.Context, token string, managerID uint, nodeID string, ttl time.Duration) error
+	ValidateAgentSession(ctx context.Context, token string, managerID uint) (bool, error)
+	AcquireJobLease(ctx context.Context, managerID uint, jobID uint, nodeID string, ttl time.Duration) (bool, error)
+	IsJobLeaseOwner(ctx context.Context, managerID uint, jobID uint, nodeID string) (bool, error)
+	RefreshJobLease(ctx context.Context, managerID uint, jobID uint, nodeID string, ttl time.Duration) (bool, error)
+	ReleaseJobLease(ctx context.Context, managerID uint, jobID uint, nodeID string) error
+	ClearJobLease(ctx context.Context, managerID uint, jobID uint) error
+	AcquireScheduleSlot(
+		ctx context.Context,
+		managerID uint,
+		userID uint,
+		taskType string,
+		slot string,
+		ttl time.Duration,
+	) (bool, error)
+}
+
 func NewRedisStore(cfg config.Config) (*RedisStore, error) {
 	client := redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr,
@@ -198,4 +218,26 @@ func (r *RedisStore) ClearJobLease(
 ) error {
 	key := r.key("job", "lease", strconv.FormatUint(uint64(managerID), 10), strconv.FormatUint(uint64(jobID), 10))
 	return r.client.Del(ctx, key).Err()
+}
+
+func (r *RedisStore) AcquireScheduleSlot(
+	ctx context.Context,
+	managerID uint,
+	userID uint,
+	taskType string,
+	slot string,
+	ttl time.Duration,
+) (bool, error) {
+	if ttl <= 0 {
+		ttl = 60 * time.Second
+	}
+	key := r.key(
+		"scheduler",
+		"slot",
+		strconv.FormatUint(uint64(managerID), 10),
+		strconv.FormatUint(uint64(userID), 10),
+		taskType,
+		slot,
+	)
+	return r.client.SetNX(ctx, key, "1", ttl).Result()
 }
