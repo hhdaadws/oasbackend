@@ -2,7 +2,7 @@
   <div class="role-dashboard">
     <el-empty
       v-if="!token"
-      description="请先在上方登录管理员，再进入下属管理页面"
+      description="请先登录管理员，再进入下属管理页面"
       :image-size="130"
     >
       <el-button type="primary" @click="$emit('logout')">返回登录区</el-button>

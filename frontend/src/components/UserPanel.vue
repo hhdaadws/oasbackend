@@ -2,7 +2,7 @@
   <div class="role-dashboard">
     <el-empty
       v-if="!token"
-      description="请先在上方登录普通用户，再进入个人中心"
+      description="请先登录普通用户，再进入个人中心"
       :image-size="130"
     >
       <el-button type="primary" @click="$emit('logout')">返回登录区</el-button>

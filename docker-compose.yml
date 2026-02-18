@@ -48,7 +48,7 @@ services:
     container_name: oas-cloud-backend
     restart: unless-stopped
     environment:
-      ADDR: "${BACKEND_ADDR:-:8080}"
+      ADDR: "${BACKEND_ADDR:-:7000}"
       DATABASE_URL: "postgres://${POSTGRES_USER:-oas}:${POSTGRES_PASSWORD:-oas_password}@postgres:5432/${POSTGRES_DB:-oas_cloud}?sslmode=disable"
       REDIS_ADDR: "redis:6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD:-redis_password}"
@@ -73,7 +73,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "${BACKEND_PORT:-8080}:8080"
+      - "${BACKEND_PORT:-7000}:7000"
 
 volumes:
   postgres_data:

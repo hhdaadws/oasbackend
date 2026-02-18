@@ -8,11 +8,11 @@ Go cloud backend for OAS runtime linkage.
 
 - Framework: **Vue 3 + Vite + Element Plus**
 - Location: `frontend/`
-- Includes full role consoles:
-  - Unified login portal: role-based auth entry for super admin / manager / user
-  - Super admin page: bootstrap init, login, renewal key issuing, manager status management
-  - Manager page: renewal redeem, activation code issuing, quick create user, sub-user task/log management
-  - User page: register by activation code, account login, redeem code, self task/log management
+- Includes full role consoles (independent pages):
+  - Login page: `/login` (manager + user auth only)
+  - Manager page: `/manager`
+  - User page: `/user`
+  - Super admin page: `/super-admin` (manual URL access only, no login-page entry)
 
 ## Quick start
 
@@ -29,7 +29,7 @@ npm run dev
 
 ## Environment variables
 
-- `ADDR` default `:8080`
+- `ADDR` default `:7000`
 - `DATABASE_URL` PostgreSQL DSN
 - `DATABASE_URL_FILE` read DSN from mounted secret file
 - `REDIS_ADDR` default `127.0.0.1:6379`
@@ -72,9 +72,9 @@ Scheduler status endpoint:
 
 `docker-compose.yml` is provided for integrated deployment:
 
-- URL: `http://localhost:8080` (frontend + backend in one container)
-- Backend API: `http://localhost:8080/api/v1/*`
-- Backend health check: `http://localhost:8080/health`
+- URL: `http://localhost:7000` (frontend + backend in one container)
+- Backend API: `http://localhost:7000/api/v1/*`
+- Backend health check: `http://localhost:7000/health`
 - Pull image from Docker Hub: `miku66/oasbackend`
 
 ```bash

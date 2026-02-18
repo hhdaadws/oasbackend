@@ -16,6 +16,6 @@ FROM gcr.io/distroless/static-debian12
 WORKDIR /app
 COPY --from=backend-builder /out/oas-cloud /app/oas-cloud
 COPY --from=frontend-builder /frontend/dist /app/web
-EXPOSE 8080
+EXPOSE 7000
 ENTRYPOINT ["/app/oas-cloud"]
 

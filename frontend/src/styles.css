@@ -43,7 +43,11 @@ body {
     linear-gradient(144deg, var(--bg-a), var(--bg-b) 52%, var(--bg-c));
 }
 
-.console-shell {
+.app-root {
+  min-height: 100vh;
+}
+
+.page-shell {
   width: min(1320px, calc(100% - 34px));
   margin: 20px auto 28px;
   position: relative;
@@ -125,6 +129,23 @@ body {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.auth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.auth-card,
+.session-card {
+  padding: 18px;
+}
+
+.session-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .auth-and-nav {
@@ -230,6 +251,10 @@ body {
   grid-template-columns: repeat(2, minmax(320px, 1fr));
 }
 
+.panel-grid--super-auth {
+  grid-template-columns: 1fr;
+}
+
 .panel-card {
   background: var(--paper-strong);
   border: 1px solid var(--line-soft);
@@ -315,6 +340,10 @@ body {
 }
 
 @media (max-width: 1180px) {
+  .auth-grid {
+    grid-template-columns: 1fr;
+  }
+
   .auth-and-nav {
     grid-template-columns: 1fr;
   }
@@ -325,7 +354,7 @@ body {
 }
 
 @media (max-width: 940px) {
-  .console-shell {
+  .page-shell {
     width: calc(100% - 18px);
     margin-top: 12px;
   }
@@ -352,5 +381,9 @@ body {
   .row-actions,
   .row-between {
     flex-wrap: wrap;
+  }
+
+  .session-actions {
+    flex-direction: column;
   }
 }

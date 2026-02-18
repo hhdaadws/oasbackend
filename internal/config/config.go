@@ -31,7 +31,7 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		Addr:               getEnv("ADDR", ":8080"),
+		Addr:               getEnv("ADDR", ":7000"),
 		ServeFrontend:      getBoolEnv("SERVE_FRONTEND", true),
 		FrontendDistDir:    getEnv("FRONTEND_DIST_DIR", "/app/web"),
 		DatabaseURL:        getEnvOrFile("DATABASE_URL", "DATABASE_URL_FILE", "postgres://postgres:postgres@127.0.0.1:5432/oas_cloud?sslmode=disable"),
