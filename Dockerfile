@@ -5,7 +5,7 @@ RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-FROM golang:1.22-alpine AS backend-builder
+FROM golang:1.25.7-alpine AS backend-builder
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
