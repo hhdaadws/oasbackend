@@ -549,9 +549,10 @@ body {
   max-height: calc(88vh - 110px);
 }
 
-/* dialog 内的表格不受全局 max-height 限制，由 dialog body 统一控制滚动 */
-.el-dialog .data-table-wrapper .el-table {
-  max-height: none;
+/* dialog 内的表格有独立滚动区域，避免 dialog body 需要长距离滚动 */
+.el-dialog .data-table-wrapper .el-table .el-table__body-wrapper {
+  max-height: min(40vh, 380px);
+  overflow-y: auto;
 }
 
 /* Collapse section spacing (JSON editor etc.) */
@@ -1058,12 +1059,13 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-.data-table-wrapper .el-table {
+.data-table-wrapper .el-table .el-table__body-wrapper {
   max-height: min(65vh, 560px);
+  overflow-y: auto;
 }
 
 @media (max-width: 940px) {
-  .data-table-wrapper .el-table {
+  .data-table-wrapper .el-table .el-table__body-wrapper {
     max-height: min(50vh, 400px);
   }
 
@@ -1084,7 +1086,7 @@ body {
 }
 
 @media (max-width: 600px) {
-  .data-table-wrapper .el-table {
+  .data-table-wrapper .el-table .el-table__body-wrapper {
     max-height: min(45vh, 320px);
   }
 

@@ -195,19 +195,38 @@
             <div class="data-table-wrapper">
               <el-table :data="taskRows" border stripe empty-text="暂无任务模板">
                 <el-table-column prop="name" label="任务类型" min-width="180" />
-                <el-table-column label="启用" width="100">
+                <el-table-column label="启用" width="100" align="center">
                   <template #default="scope">
                     <el-switch v-model="scope.row.config.enabled" />
                   </template>
                 </el-table-column>
-                <el-table-column label="执行时间" min-width="200">
+                <el-table-column label="执行时间" min-width="280">
                   <template #default="scope">
-                    <el-date-picker v-model="scope.row.config.next_time"
-                      type="datetime" value-format="YYYY-MM-DD HH:mm"
-                      placeholder="选择日期时间" size="small" style="width:170px" />
+                    <div class="next-time-row">
+                      <el-radio-group
+                        v-model="scope.row._nextTimeMode"
+                        size="small"
+                        @change="(mode) => { if (mode === 'daily' && !isHHmmPattern(scope.row.config.next_time)) scope.row.config.next_time = '08:00'; }"
+                      >
+                        <el-radio-button value="daily">每日</el-radio-button>
+                        <el-radio-button value="datetime">指定</el-radio-button>
+                      </el-radio-group>
+                      <el-time-select
+                        v-if="scope.row._nextTimeMode === 'daily'"
+                        v-model="scope.row.config.next_time"
+                        start="00:00" end="23:30" step="00:30"
+                        placeholder="时:分" size="small" style="width: 100px"
+                      />
+                      <el-date-picker
+                        v-else
+                        v-model="scope.row.config.next_time"
+                        type="datetime" value-format="YYYY-MM-DD HH:mm"
+                        placeholder="选择日期时间" size="small" style="width: 170px"
+                      />
+                    </div>
                   </template>
                 </el-table-column>
-                <el-table-column label="失败延迟(分)" width="130">
+                <el-table-column label="失败延迟(分)" width="130" align="center">
                   <template #default="scope">
                     <el-input-number v-model="scope.row.config.fail_delay" :min="0" :max="100000" size="small" />
                   </template>
@@ -300,6 +319,7 @@ import {
   patchSummary,
   ensureTaskConfig,
   parseTaskConfigFromRaw,
+  isHHmmPattern,
   ASSET_FIELDS,
   USER_TYPE_OPTIONS,
   copyToClipboard,
@@ -430,6 +450,7 @@ function buildTaskRows(config) {
     return {
       name,
       config: cfg,
+      _nextTimeMode: isHHmmPattern(cfg.next_time) ? "daily" : "datetime",
     };
   });
 }

@@ -112,7 +112,7 @@ async function saveMeTasks() {
     <div class="data-table-wrapper">
       <el-table :data="taskRows" border stripe empty-text="暂无可配置任务">
         <el-table-column prop="name" label="任务类型" min-width="170" />
-        <el-table-column label="启用" width="100">
+        <el-table-column label="启用" width="100" align="center">
           <template #default="scope">
             <el-switch v-model="scope.row.config.enabled" />
           </template>
@@ -143,7 +143,7 @@ async function saveMeTasks() {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="失败延迟(分)" width="130">
+        <el-table-column label="失败延迟(分)" width="130" align="center">
           <template #default="scope">
             <el-input-number v-model="scope.row.config.fail_delay" :min="0" :max="100000" size="small" />
           </template>
