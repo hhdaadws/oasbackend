@@ -66,7 +66,7 @@
           empty-text="暂无激活码数据"
           @selection-change="onSelectionChange"
         >
-          <el-table-column type="selection" width="45" :selectable="(row) => row.status === 'unused'" />
+          <el-table-column type="selection" width="45" :selectable="(row) => row.status === 'unused' || row.status === 'used'" />
           <el-table-column prop="id" label="ID" width="80" sortable />
           <el-table-column label="激活码" min-width="220">
             <template #default="scope">
