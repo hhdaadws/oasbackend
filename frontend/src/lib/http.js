@@ -230,6 +230,12 @@ export const managerApi = {
       params,
       headers: withBearer(token),
     }),
+  deleteUserLogs: (token, userId) =>
+    request({
+      method: "DELETE",
+      url: `/manager/users/${userId}/logs`,
+      headers: withBearer(token),
+    }),
   batchUserLifecycle: (token, payload) =>
     request({
       method: "POST",

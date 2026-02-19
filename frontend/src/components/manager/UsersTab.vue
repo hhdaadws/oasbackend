@@ -3,7 +3,15 @@
     <section class="panel-card">
       <div class="panel-headline">
         <h3>下属用户列表</h3>
-        <el-button type="warning" size="small" @click="showQuickCreateDialog = true">创建用户</el-button>
+        <div class="row-actions">
+          <template v-if="hasSelection">
+            <span class="muted" style="font-size:13px">已选 {{ selectedCount }} 项</span>
+            <el-button type="primary" size="small" @click="showBatchLifecycleDialog = true">批量生命周期</el-button>
+            <el-button type="success" size="small" @click="showBatchAssetsDialog = true">批量资产设置</el-button>
+            <el-button size="small" plain @click="doClearSelection">取消</el-button>
+          </template>
+          <el-button v-else type="warning" size="small" @click="showQuickCreateDialog = true">创建用户</el-button>
+        </div>
       </div>
       <div class="filter-row" style="margin-bottom:12px">
         <el-input v-model="filters.keyword" placeholder="搜索账号" clearable />
@@ -100,13 +108,6 @@
           @size-change="loadUsers"
         />
       </div>
-
-      <transition name="batch-bar">
-        <BatchActionBar v-if="hasSelection" :selected-count="selectedCount" @clear="doClearSelection">
-          <el-button type="primary" @click="showBatchLifecycleDialog = true">批量生命周期</el-button>
-          <el-button type="success" @click="showBatchAssetsDialog = true">批量资产设置</el-button>
-        </BatchActionBar>
-      </transition>
     </section>
 
     <!-- Quick Create Dialog -->
@@ -199,22 +200,11 @@
                     <el-switch v-model="scope.row.config.enabled" />
                   </template>
                 </el-table-column>
-                <el-table-column label="执行时间" min-width="280">
+                <el-table-column label="执行时间" min-width="200">
                   <template #default="scope">
-                    <div class="next-time-row">
-                      <el-radio-group v-model="scope.row._nextTimeMode" size="small"
-                        @change="(mode) => { if (mode === 'daily' && !isHHmmPattern(scope.row.config.next_time)) scope.row.config.next_time = '08:00'; }">
-                        <el-radio-button value="daily">每日</el-radio-button>
-                        <el-radio-button value="datetime">指定</el-radio-button>
-                      </el-radio-group>
-                      <el-time-select v-if="scope.row._nextTimeMode === 'daily'"
-                        v-model="scope.row.config.next_time"
-                        start="00:00" end="23:30" step="00:30"
-                        placeholder="时:分" size="small" style="width:100px" />
-                      <el-date-picker v-else v-model="scope.row.config.next_time"
-                        type="datetime" value-format="YYYY-MM-DD HH:mm"
-                        placeholder="选择日期时间" size="small" style="width:170px" />
-                    </div>
+                    <el-date-picker v-model="scope.row.config.next_time"
+                      type="datetime" value-format="YYYY-MM-DD HH:mm"
+                      placeholder="选择日期时间" size="small" style="width:170px" />
                   </template>
                 </el-table-column>
                 <el-table-column label="失败延迟(分)" width="130">
@@ -238,6 +228,14 @@
               <el-button type="primary" :loading="loading.saveTasks" @click="saveSelectedUserTasks">保存任务配置</el-button>
             </div>
           </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="执行日志">
+          <UserLogsTab
+            :token="props.token"
+            :selected-user-id="props.selectedUserId"
+            :selected-user-account-no="props.selectedUserAccountNo"
+          />
         </el-tab-pane>
       </el-tabs>
 
@@ -299,7 +297,6 @@ import {
   statusLabel,
   userTypeLabel,
   formatTime,
-  isHHmmPattern,
   patchSummary,
   ensureTaskConfig,
   parseTaskConfigFromRaw,
@@ -310,8 +307,8 @@ import {
 import { usePagination } from "../../composables/usePagination";
 import { useBatchSelection } from "../../composables/useBatchSelection";
 import { useDebouncedFilter } from "../../composables/useDebouncedFilter";
-import BatchActionBar from "../shared/BatchActionBar.vue";
 import TableSkeleton from "../shared/TableSkeleton.vue";
+import UserLogsTab from "./UserLogsTab.vue";
 
 const props = defineProps({
   token: { type: String, default: "" },
@@ -433,7 +430,6 @@ function buildTaskRows(config) {
     return {
       name,
       config: cfg,
-      _nextTimeMode: isHHmmPattern(cfg.next_time) ? "daily" : "datetime",
     };
   });
 }

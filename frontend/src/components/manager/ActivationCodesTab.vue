@@ -43,7 +43,14 @@
     <section class="panel-card">
       <div class="panel-headline">
         <h3>激活码列表</h3>
-        <span class="muted">共 {{ pagination.total }} 条</span>
+        <div class="row-actions">
+          <template v-if="hasSelection">
+            <span class="muted" style="font-size:13px">已选 {{ selectedCount }} 项</span>
+            <el-button type="danger" size="small" :loading="loading.batchDelete" @click="batchDelete">批量删除</el-button>
+            <el-button size="small" plain @click="doClearSelection">取消</el-button>
+          </template>
+          <span v-else class="muted">共 {{ pagination.total }} 条</span>
+        </div>
       </div>
 
       <TableSkeleton v-if="activationCodes.length === 0 && loading.codes" :rows="5" :columns="8" />
@@ -87,7 +94,7 @@
           <el-table-column label="操作" width="120">
             <template #default="scope">
               <el-button
-                v-if="scope.row.status === 'unused'"
+                v-if="scope.row.status === 'unused' || scope.row.status === 'used'"
                 type="danger"
                 plain
                 size="small"
@@ -113,12 +120,6 @@
           @size-change="loadActivationCodes"
         />
       </div>
-
-      <transition name="batch-bar">
-        <BatchActionBar v-if="hasSelection" :selected-count="selectedCount" @clear="doClearSelection">
-          <el-button type="danger" :loading="loading.batchDelete" @click="batchDelete">批量删除</el-button>
-        </BatchActionBar>
-      </transition>
     </section>
 
     <el-dialog v-model="showCreateDialog" title="生成激活码" width="440px"
@@ -174,7 +175,6 @@ import {
 import { usePagination } from "../../composables/usePagination";
 import { useBatchSelection } from "../../composables/useBatchSelection";
 import { useDebouncedFilter } from "../../composables/useDebouncedFilter";
-import BatchActionBar from "../shared/BatchActionBar.vue";
 import TableSkeleton from "../shared/TableSkeleton.vue";
 
 const props = defineProps({

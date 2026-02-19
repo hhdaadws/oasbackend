@@ -126,6 +126,7 @@ func (s *Server) mountRoutes() {
 		managerGroup.GET("/users/:user_id/tasks", s.managerGetUserTasks)
 		managerGroup.PUT("/users/:user_id/tasks", s.managerPutUserTasks)
 		managerGroup.GET("/users/:user_id/logs", s.managerGetUserLogs)
+		managerGroup.DELETE("/users/:user_id/logs", s.managerDeleteUserLogs)
 		managerGroup.POST("/users/batch-lifecycle", s.managerBatchUserLifecycle)
 		managerGroup.POST("/users/batch-assets", s.managerBatchUserAssets)
 		managerGroup.POST("/activation-codes/batch-revoke", s.managerBatchRevokeActivationCodes)
@@ -176,7 +177,7 @@ func (s *Server) schedulerStatus(c *gin.Context) {
 func (s *Server) taskTemplates(c *gin.Context) {
 	rawType := strings.TrimSpace(c.Query("user_type"))
 	if rawType != "" && !models.IsValidUserType(rawType) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid user_type"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的用户类型"})
 		return
 	}
 	userType := models.NormalizeUserType(rawType)
@@ -223,7 +224,7 @@ func (s *Server) mountFrontendRoutes() {
 	s.router.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if strings.HasPrefix(path, "/api/") || path == "/health" || strings.HasPrefix(path, "/super/") {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "记录不存在"})
 			return
 		}
 		c.File(indexPath)
@@ -248,13 +249,13 @@ func (s *Server) bootstrapInit(c *gin.Context) {
 	var count int64
 	s.db.Model(&models.SuperAdmin{}).Count(&count)
 	if count > 0 {
-		c.JSON(http.StatusConflict, gin.H{"detail": "super admin already initialized"})
+		c.JSON(http.StatusConflict, gin.H{"detail": "超级管理员已初始化"})
 		return
 	}
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to hash password"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "密码加密失败"})
 		return
 	}
 
@@ -266,7 +267,7 @@ func (s *Server) bootstrapInit(c *gin.Context) {
 		UpdatedAt:    now,
 	}
 	if err := s.db.Create(&admin).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to create super admin"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "创建超级管理员失败"})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"message": "super admin initialized"})
@@ -280,16 +281,16 @@ func (s *Server) superLogin(c *gin.Context) {
 	}
 	var admin models.SuperAdmin
 	if err := s.db.Where("username = ?", req.Username).First(&admin).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "账号或密码错误"})
 		return
 	}
 	if !auth.VerifyPassword(req.Password, admin.PasswordHash) {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "账号或密码错误"})
 		return
 	}
 	token, err := s.tokenManager.IssueJWT(models.ActorTypeSuper, admin.ID, 0, s.cfg.JWTTTL)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to issue token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "令牌签发失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"token": token, "role": models.ActorTypeSuper})
@@ -304,7 +305,7 @@ func (s *Server) managerRegister(c *gin.Context) {
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to hash password"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "密码加密失败"})
 		return
 	}
 	now := time.Now().UTC()
@@ -317,7 +318,7 @@ func (s *Server) managerRegister(c *gin.Context) {
 		UpdatedAt:    now,
 	}
 	if err := s.db.Create(&manager).Error; err != nil {
-		c.JSON(http.StatusConflict, gin.H{"detail": "username already exists"})
+		c.JSON(http.StatusConflict, gin.H{"detail": "用户名已存在"})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"message": "manager registered, redeem renewal key to activate"})
@@ -331,21 +332,21 @@ func (s *Server) managerLogin(c *gin.Context) {
 	}
 	var manager models.Manager
 	if err := s.db.Where("username = ?", req.Username).First(&manager).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "账号或密码错误"})
 		return
 	}
 	if !auth.VerifyPassword(req.Password, manager.PasswordHash) {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "账号或密码错误"})
 		return
 	}
 	now := time.Now().UTC()
 	if manager.Status == models.ManagerStatusDisabled {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "manager disabled"})
+		c.JSON(http.StatusForbidden, gin.H{"detail": "管理员账号已禁用"})
 		return
 	}
 	token, err := s.tokenManager.IssueJWT(models.ActorTypeManager, manager.ID, manager.ID, s.cfg.JWTTTL)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to issue token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "令牌签发失败"})
 		return
 	}
 	expired := manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) || manager.Status != models.ManagerStatusActive
@@ -368,7 +369,7 @@ func (s *Server) superCreateManagerRenewalKey(c *gin.Context) {
 
 	code, err := auth.GenerateOpaqueToken("mrk", 12)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to generate key"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "生成密钥失败"})
 		return
 	}
 	actorID := getUint(c, ctxActorIDKey)
@@ -381,7 +382,7 @@ func (s *Server) superCreateManagerRenewalKey(c *gin.Context) {
 		CreatedAt:             now,
 	}
 	if err := s.db.Create(&key).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to save key"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存密钥失败"})
 		return
 	}
 	s.audit(models.ActorTypeSuper, actorID, "create_manager_renewal_key", "manager_renewal_key", key.ID, datatypes.JSONMap{"duration_days": req.DurationDays}, c.ClientIP())
@@ -393,7 +394,7 @@ func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("keyword"))
 	pg := readPagination(c, 50, 200)
 	if status != "" && !isCodeStatus(status) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 		return
 	}
 
@@ -407,13 +408,13 @@ func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
 
 	var filteredTotal int64
 	if err := baseQuery.Count(&filteredTotal).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to count renewal keys"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "统计续费密钥失败"})
 		return
 	}
 
 	var keys []models.ManagerRenewalKey
 	if err := baseQuery.Order("id desc").Offset(pg.Offset).Limit(pg.PageSize).Find(&keys).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query renewal keys"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询续费密钥失败"})
 		return
 	}
 
@@ -488,7 +489,7 @@ func (s *Server) superListManagers(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("keyword"))
 	pg := readPagination(c, 50, 200)
 	if status != "" && !isManagerStatus(status) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 		return
 	}
 
@@ -502,13 +503,13 @@ func (s *Server) superListManagers(c *gin.Context) {
 
 	var filteredTotal int64
 	if err := baseQuery.Count(&filteredTotal).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to count managers"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "统计管理员失败"})
 		return
 	}
 
 	var managers []models.Manager
 	if err := baseQuery.Order("id desc").Offset(pg.Offset).Limit(pg.PageSize).Find(&managers).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query managers"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询管理员失败"})
 		return
 	}
 
@@ -567,14 +568,14 @@ func (s *Server) superPatchManagerRenewalKeyStatus(c *gin.Context) {
 	var key models.ManagerRenewalKey
 	if err := s.db.Where("id = ?", keyID).First(&key).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "renewal key not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "续费密钥不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query renewal key"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询续费密钥失败"})
 		return
 	}
 	if key.Status == models.CodeStatusUsed {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "used renewal key cannot be revoked"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "已使用的续费密钥不可撤销"})
 		return
 	}
 	if key.Status == models.CodeStatusRevoked {
@@ -585,7 +586,7 @@ func (s *Server) superPatchManagerRenewalKeyStatus(c *gin.Context) {
 	if err := s.db.Model(&models.ManagerRenewalKey{}).Where("id = ?", keyID).Updates(map[string]any{
 		"status": models.CodeStatusRevoked,
 	}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to revoke renewal key"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "撤销续费密钥失败"})
 		return
 	}
 	actorID := getUint(c, ctxActorIDKey)
@@ -603,7 +604,7 @@ func (s *Server) superPatchManagerStatus(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid manager id"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的管理员ID"})
 		return
 	}
 
@@ -614,11 +615,11 @@ func (s *Server) superPatchManagerStatus(c *gin.Context) {
 	}
 	result := s.db.Model(&models.Manager{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to patch manager"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新管理员状态失败"})
 		return
 	}
 	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "manager not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "管理员不存在"})
 		return
 	}
 	actorID := getUint(c, ctxActorIDKey)
@@ -638,7 +639,7 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least one field must be provided"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
 		return
 	}
 
@@ -646,10 +647,10 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	var manager models.Manager
 	if err := s.db.Where("id = ?", managerID).First(&manager).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "manager not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "管理员不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query manager"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询管理员失败"})
 		return
 	}
 
@@ -658,7 +659,7 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	if rawExpires := strings.TrimSpace(req.ExpiresAt); rawExpires != "" {
 		parsed, err := parseFlexibleDateTime(rawExpires)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid expires_at format"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "到期时间格式无效"})
 			return
 		}
 		updates["expires_at"] = parsed
@@ -666,7 +667,7 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	}
 	if req.ExtendDays != 0 {
 		if req.ExtendDays < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "extend_days must be positive"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "延长天数必须为正数"})
 			return
 		}
 		newExpire := extendExpiry(manager.ExpiresAt, req.ExtendDays, now)
@@ -676,7 +677,7 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 
 	if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
 		if !isManagerStatus(rawStatus) {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 			return
 		}
 		updates["status"] = rawStatus
@@ -695,7 +696,7 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	}
 
 	if err := s.db.Model(&models.Manager{}).Where("id = ?", managerID).Updates(updates).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to patch manager lifecycle"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新管理员生命周期失败"})
 		return
 	}
 	actorID := getUint(c, ctxActorIDKey)
@@ -716,15 +717,15 @@ func (s *Server) superBatchManagerLifecycle(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least one field must be provided"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
 		return
 	}
 	if req.ExtendDays < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "extend_days must be positive"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "延长天数必须为正数"})
 		return
 	}
 	if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" && !isManagerStatus(rawStatus) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 		return
 	}
 
@@ -733,7 +734,7 @@ func (s *Server) superBatchManagerLifecycle(c *gin.Context) {
 	if rawExpires := strings.TrimSpace(req.ExpiresAt); rawExpires != "" {
 		parsed, err := parseFlexibleDateTime(rawExpires)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid expires_at format"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "到期时间格式无效"})
 			return
 		}
 		parsedExpires = parsed
@@ -787,7 +788,7 @@ func (s *Server) superBatchManagerLifecycle(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch update manager lifecycle"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量更新管理员生命周期失败"})
 		return
 	}
 	s.audit(models.ActorTypeSuper, actorID, "batch_manager_lifecycle", "manager", 0, datatypes.JSONMap{
@@ -816,7 +817,7 @@ func (s *Server) superBatchManagerStatus(c *gin.Context) {
 
 	result := s.db.Model(&models.Manager{}).Where("id IN ?", req.ManagerIDs).Updates(updates)
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch update manager status"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量更新管理员状态失败"})
 		return
 	}
 	s.audit(models.ActorTypeSuper, actorID, "batch_manager_status", "manager", 0, datatypes.JSONMap{
@@ -839,7 +840,7 @@ func (s *Server) superBatchRevokeRenewalKeys(c *gin.Context) {
 		Where("id IN ? AND status = ?", req.KeyIDs, models.CodeStatusUnused).
 		Updates(map[string]any{"status": models.CodeStatusRevoked})
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch revoke renewal keys"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量撤销续费密钥失败"})
 		return
 	}
 	s.audit(models.ActorTypeSuper, actorID, "batch_revoke_renewal_keys", "manager_renewal_key", 0, datatypes.JSONMap{
@@ -857,18 +858,18 @@ func (s *Server) superDeleteManagerRenewalKey(c *gin.Context) {
 	var key models.ManagerRenewalKey
 	if err := s.db.Where("id = ?", keyID).First(&key).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "renewal key not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "续费密钥不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query renewal key"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询续费密钥失败"})
 		return
 	}
 	if key.Status == models.CodeStatusUsed {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "used renewal key cannot be deleted"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "已使用的续费密钥不可删除"})
 		return
 	}
 	if err := s.db.Delete(&models.ManagerRenewalKey{}, keyID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to delete renewal key"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "删除续费密钥失败"})
 		return
 	}
 	actorID := getUint(c, ctxActorIDKey)
@@ -889,7 +890,7 @@ func (s *Server) superBatchDeleteRenewalKeys(c *gin.Context) {
 
 	result := s.db.Where("id IN ? AND status = ?", req.IDs, models.CodeStatusUnused).Delete(&models.ManagerRenewalKey{})
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch delete renewal keys"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量删除续费密钥失败"})
 		return
 	}
 	s.audit(models.ActorTypeSuper, actorID, "batch_delete_renewal_keys", "manager_renewal_key", 0, datatypes.JSONMap{
@@ -940,7 +941,7 @@ func (s *Server) managerRedeemRenewalKey(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "renewal key not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "续费密钥不存在"})
 			return
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
@@ -955,10 +956,10 @@ func (s *Server) managerGetMe(c *gin.Context) {
 	var manager models.Manager
 	if err := s.db.Where("id = ?", managerID).First(&manager).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "manager not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "管理员不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query manager"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询管理员失败"})
 		return
 	}
 	now := time.Now().UTC()
@@ -982,7 +983,7 @@ func (s *Server) managerCreateActivationCode(c *gin.Context) {
 	userType := models.NormalizeUserType(req.UserType)
 	code, err := auth.GenerateOpaqueToken("uac", 12)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to generate activation code"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "生成激活码失败"})
 		return
 	}
 	now := time.Now().UTC()
@@ -995,7 +996,7 @@ func (s *Server) managerCreateActivationCode(c *gin.Context) {
 		CreatedAt:    now,
 	}
 	if err := s.db.Create(&activation).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to create activation code"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "创建激活码失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "create_activation_code", "user_activation_code", activation.ID, datatypes.JSONMap{
@@ -1017,11 +1018,11 @@ func (s *Server) managerListActivationCodes(c *gin.Context) {
 	pg := readPagination(c, 50, 200)
 
 	if status != "" && !isCodeStatus(status) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 		return
 	}
 	if userType != "" && !models.IsValidUserType(userType) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid user_type"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的用户类型"})
 		return
 	}
 
@@ -1039,13 +1040,13 @@ func (s *Server) managerListActivationCodes(c *gin.Context) {
 
 	var filteredTotal int64
 	if err := baseQuery.Count(&filteredTotal).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to count activation codes"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "统计激活码失败"})
 		return
 	}
 
 	var codes []models.UserActivationCode
 	if err := baseQuery.Order("id desc").Offset(pg.Offset).Limit(pg.PageSize).Find(&codes).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query activation codes"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询激活码失败"})
 		return
 	}
 
@@ -1131,14 +1132,14 @@ func (s *Server) managerPatchActivationCodeStatus(c *gin.Context) {
 	var code models.UserActivationCode
 	if err := s.db.Where("id = ? AND manager_id = ?", codeID, managerID).First(&code).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "activation code not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "激活码不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query activation code"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询激活码失败"})
 		return
 	}
 	if code.Status == models.CodeStatusUsed {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "used activation code cannot be revoked"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "已使用的激活码不可撤销"})
 		return
 	}
 	if code.Status == models.CodeStatusRevoked {
@@ -1148,7 +1149,7 @@ func (s *Server) managerPatchActivationCodeStatus(c *gin.Context) {
 	if err := s.db.Model(&models.UserActivationCode{}).Where("id = ?", codeID).Updates(map[string]any{
 		"status": models.CodeStatusRevoked,
 	}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to revoke activation code"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "撤销激活码失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "patch_activation_code_status", "user_activation_code", codeID, datatypes.JSONMap{
@@ -1192,7 +1193,7 @@ func (s *Server) managerQuickCreateUser(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to quick create user"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "快速创建用户失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "quick_create_user", "user", createdUser.ID, datatypes.JSONMap{
@@ -1214,11 +1215,11 @@ func (s *Server) managerListUsers(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("keyword"))
 	pg := readPagination(c, 50, 200)
 	if status != "" && !isUserStatus(status) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 		return
 	}
 	if userType != "" && !models.IsValidUserType(userType) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid user_type"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的用户类型"})
 		return
 	}
 
@@ -1235,13 +1236,13 @@ func (s *Server) managerListUsers(c *gin.Context) {
 
 	var filteredTotal int64
 	if err := baseQuery.Count(&filteredTotal).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to count users"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "统计用户失败"})
 		return
 	}
 
 	var users []models.User
 	if err := baseQuery.Order("id asc").Offset(pg.Offset).Limit(pg.PageSize).Find(&users).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query users"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询用户失败"})
 		return
 	}
 
@@ -1316,7 +1317,7 @@ func (s *Server) managerOverview(c *gin.Context) {
 	for _, status := range userStatusTargets {
 		var count int64
 		if err := s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, status).Count(&count).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query user overview"})
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询用户概览失败"})
 			return
 		}
 		userStats[status] = count
@@ -1328,7 +1329,7 @@ func (s *Server) managerOverview(c *gin.Context) {
 	for _, status := range jobStatusTargets {
 		var count int64
 		if err := s.db.Model(&models.TaskJob{}).Where("manager_id = ? AND status = ?", managerID, status).Count(&count).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query job overview"})
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询任务概览失败"})
 			return
 		}
 		jobStats[status] = count
@@ -1340,7 +1341,7 @@ func (s *Server) managerOverview(c *gin.Context) {
 		Joins("JOIN task_jobs ON task_jobs.id = task_job_events.job_id").
 		Where("task_jobs.manager_id = ? AND task_job_events.event_type = ? AND task_job_events.event_at >= ?", managerID, "fail", since).
 		Count(&recentFailures).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query recent failures"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询近期失败任务失败"})
 		return
 	}
 
@@ -1363,12 +1364,12 @@ func (s *Server) managerGetUserTasks(c *gin.Context) {
 	}
 	var user models.User
 	if err := s.db.Where("id = ? AND manager_id = ?", userID, managerID).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
 		return
 	}
 	config, err := s.getOrCreateTaskConfig(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to load task config"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "加载任务配置失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1395,14 +1396,14 @@ func (s *Server) managerPatchUserLifecycle(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least one field must be provided"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
 		return
 	}
 
 	now := time.Now().UTC()
 	var user models.User
 	if err := s.db.Where("id = ? AND manager_id = ?", userID, managerID).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
 		return
 	}
 
@@ -1411,7 +1412,7 @@ func (s *Server) managerPatchUserLifecycle(c *gin.Context) {
 	if strings.TrimSpace(req.ExpiresAt) != "" {
 		parsed, err := parseFlexibleDateTime(req.ExpiresAt)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid expires_at format"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "到期时间格式无效"})
 			return
 		}
 		updates["expires_at"] = parsed
@@ -1419,7 +1420,7 @@ func (s *Server) managerPatchUserLifecycle(c *gin.Context) {
 	}
 	if req.ExtendDays != 0 {
 		if req.ExtendDays < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "extend_days must be positive"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "延长天数必须为正数"})
 			return
 		}
 		newExpire := extendExpiry(user.ExpiresAt, req.ExtendDays, now)
@@ -1429,7 +1430,7 @@ func (s *Server) managerPatchUserLifecycle(c *gin.Context) {
 
 	if status := strings.TrimSpace(req.Status); status != "" {
 		if status != models.UserStatusActive && status != models.UserStatusExpired && status != models.UserStatusDisabled {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 			return
 		}
 		updates["status"] = status
@@ -1447,7 +1448,7 @@ func (s *Server) managerPatchUserLifecycle(c *gin.Context) {
 	}
 
 	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update user lifecycle"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新用户生命周期失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "patch_user_lifecycle", "user", userID, datatypes.JSONMap{
@@ -1470,7 +1471,7 @@ func (s *Server) managerGetUserAssets(c *gin.Context) {
 
 	var user models.User
 	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
 		return
 	}
 	assets := deepMergeMap(taskmeta.BuildDefaultUserAssets(), map[string]any(user.Assets))
@@ -1511,7 +1512,7 @@ func (s *Server) managerPutUserAssets(c *gin.Context) {
 		"assets":     datatypes.JSONMap(base),
 		"updated_at": time.Now().UTC(),
 	}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update user assets"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新用户资产失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "update_user_assets", "user", userID, datatypes.JSONMap{"assets": req.Assets}, c.ClientIP())
@@ -1535,15 +1536,15 @@ func (s *Server) managerPutUserTasks(c *gin.Context) {
 	updated, err := s.mergeTaskConfig(userID, req.TaskConfig)
 	if err != nil {
 		if errors.Is(err, errInvalidTaskConfigPatch) {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "task_config contains tasks not allowed for this user type"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "任务配置包含该用户类型不允许的任务"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update task config"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新任务配置失败"})
 		return
 	}
 	var user models.User
 	if err := s.db.Where("id = ? AND manager_id = ?", userID, managerID).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1566,7 +1567,7 @@ func (s *Server) managerGetUserLogs(c *gin.Context) {
 	pg := readPagination(c, 50, 200)
 	items, total, err := s.queryUserLogsPaginated(managerID, userID, pg)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query logs"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询日志失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1575,6 +1576,25 @@ func (s *Server) managerGetUserLogs(c *gin.Context) {
 		"page":      pg.Page,
 		"page_size": pg.PageSize,
 	})
+}
+
+func (s *Server) managerDeleteUserLogs(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	userID, ok := parseUintParam(c, "user_id")
+	if !ok {
+		return
+	}
+	if !s.managerOwnsUser(c, managerID, userID) {
+		return
+	}
+	if err := s.db.Exec(
+		"DELETE FROM task_job_events WHERE job_id IN (SELECT id FROM task_jobs WHERE manager_id = ? AND user_id = ?)",
+		managerID, userID,
+	).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "删除日志失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "logs cleared"})
 }
 
 // ── Manager batch handlers ────────────────────────────
@@ -1587,16 +1607,16 @@ func (s *Server) managerBatchUserLifecycle(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least one field must be provided"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
 		return
 	}
 	if req.ExtendDays < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "extend_days must be positive"})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "延长天数必须为正数"})
 		return
 	}
 	if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
 		if rawStatus != models.UserStatusActive && rawStatus != models.UserStatusExpired && rawStatus != models.UserStatusDisabled {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid status"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 			return
 		}
 	}
@@ -1606,7 +1626,7 @@ func (s *Server) managerBatchUserLifecycle(c *gin.Context) {
 	if rawExpires := strings.TrimSpace(req.ExpiresAt); rawExpires != "" {
 		parsed, err := parseFlexibleDateTime(rawExpires)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid expires_at format"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "到期时间格式无效"})
 			return
 		}
 		parsedExpires = parsed
@@ -1659,7 +1679,7 @@ func (s *Server) managerBatchUserLifecycle(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"detail": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch update user lifecycle"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量更新用户生命周期失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "batch_user_lifecycle", "user", 0, datatypes.JSONMap{
@@ -1718,7 +1738,7 @@ func (s *Server) managerBatchUserAssets(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"detail": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch update user assets"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量更新用户资产失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "batch_user_assets", "user", 0, datatypes.JSONMap{
@@ -1741,7 +1761,7 @@ func (s *Server) managerBatchRevokeActivationCodes(c *gin.Context) {
 		Where("id IN ? AND manager_id = ? AND status = ?", req.CodeIDs, managerID, models.CodeStatusUnused).
 		Updates(map[string]any{"status": models.CodeStatusRevoked})
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch revoke activation codes"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量撤销激活码失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "batch_revoke_activation_codes", "user_activation_code", 0, datatypes.JSONMap{
@@ -1761,18 +1781,14 @@ func (s *Server) managerDeleteActivationCode(c *gin.Context) {
 	var code models.UserActivationCode
 	if err := s.db.Where("id = ? AND manager_id = ?", codeID, managerID).First(&code).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "activation code not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "激活码不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query activation code"})
-		return
-	}
-	if code.Status == models.CodeStatusUsed {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "used activation code cannot be deleted"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询激活码失败"})
 		return
 	}
 	if err := s.db.Delete(&models.UserActivationCode{}, codeID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to delete activation code"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "删除激活码失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "delete_activation_code", "user_activation_code", codeID, datatypes.JSONMap{
@@ -1790,9 +1806,9 @@ func (s *Server) managerBatchDeleteActivationCodes(c *gin.Context) {
 		return
 	}
 
-	result := s.db.Where("id IN ? AND manager_id = ? AND status = ?", req.CodeIDs, managerID, models.CodeStatusUnused).Delete(&models.UserActivationCode{})
+	result := s.db.Where("id IN ? AND manager_id = ? AND status IN ?", req.CodeIDs, managerID, []string{models.CodeStatusUnused, models.CodeStatusUsed}).Delete(&models.UserActivationCode{})
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to batch delete activation codes"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量删除激活码失败"})
 		return
 	}
 	s.audit(models.ActorTypeManager, managerID, "batch_delete_activation_codes", "user_activation_code", 0, datatypes.JSONMap{
@@ -1827,7 +1843,7 @@ func (s *Server) userRegisterByCode(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "activation code not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "激活码不存在"})
 			return
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
@@ -1836,7 +1852,7 @@ func (s *Server) userRegisterByCode(c *gin.Context) {
 
 	rawToken, tokenExpire, err := s.issueUserToken(createdUser.ID, "register")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to issue user token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "签发用户令牌失败"})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{
@@ -1856,21 +1872,21 @@ func (s *Server) userLogin(c *gin.Context) {
 	}
 	var user models.User
 	if err := s.db.Where("account_no = ?", req.AccountNo).First(&user).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid account"})
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "账号不存在"})
 		return
 	}
 	now := time.Now().UTC()
 	if user.Status != models.UserStatusActive {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "user not active"})
+		c.JSON(http.StatusForbidden, gin.H{"detail": "用户账号未激活"})
 		return
 	}
 	if user.ExpiresAt == nil || !user.ExpiresAt.After(now) {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "user expired"})
+		c.JSON(http.StatusForbidden, gin.H{"detail": "用户账号已过期"})
 		return
 	}
 	rawToken, tokenExpire, err := s.issueUserToken(user.ID, req.DeviceInfo)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to issue user token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "签发用户令牌失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1930,11 +1946,11 @@ func (s *Server) userRedeemCode(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "activation code not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "激活码不存在"})
 			return
 		}
 		if strings.Contains(err.Error(), "forbidden") {
-			c.JSON(http.StatusForbidden, gin.H{"detail": "activation code does not belong to your manager"})
+			c.JSON(http.StatusForbidden, gin.H{"detail": "激活码不属于您的管理员"})
 			return
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
@@ -1959,13 +1975,13 @@ func (s *Server) userGetMeProfile(c *gin.Context) {
 
 	var user models.User
 	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
 		return
 	}
 
 	var token models.UserToken
 	if err := s.db.Where("id = ? AND user_id = ?", tokenID, userID).First(&token).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user token not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户令牌不存在"})
 		return
 	}
 
@@ -2002,7 +2018,7 @@ func (s *Server) userLogout(c *gin.Context) {
 	}
 	result := query.Updates(map[string]any{"revoked_at": now})
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to revoke token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "撤销令牌失败"})
 		return
 	}
 
@@ -2015,7 +2031,7 @@ func (s *Server) userGetMeAssets(c *gin.Context) {
 
 	var user models.User
 	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
 		return
 	}
 
@@ -2034,12 +2050,12 @@ func (s *Server) userGetMeTasks(c *gin.Context) {
 	userID := getUint(c, ctxUserIDKey)
 	var user models.User
 	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
 		return
 	}
 	config, err := s.getOrCreateTaskConfig(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to load task config"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "加载任务配置失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -2079,15 +2095,15 @@ func (s *Server) userPutMeTasks(c *gin.Context) {
 	updated, err := s.mergeTaskConfig(userID, req.TaskConfig)
 	if err != nil {
 		if errors.Is(err, errInvalidTaskConfigPatch) {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "task_config contains tasks not allowed for this user type"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "任务配置包含该用户类型不允许的任务"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update task config"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新任务配置失败"})
 		return
 	}
 	var user models.User
 	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -2103,7 +2119,7 @@ func (s *Server) userGetMeLogs(c *gin.Context) {
 	pg := readPagination(c, 50, 200)
 	items, total, err := s.queryUserLogsPaginated(managerID, userID, pg)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query logs"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询日志失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -2122,25 +2138,25 @@ func (s *Server) agentLogin(c *gin.Context) {
 	}
 	var manager models.Manager
 	if err := s.db.Where("username = ?", req.Username).First(&manager).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "账号或密码错误"})
 		return
 	}
 	if !auth.VerifyPassword(req.Password, manager.PasswordHash) {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "账号或密码错误"})
 		return
 	}
 	now := time.Now().UTC()
 	if manager.Status != models.ManagerStatusActive || manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "manager not active"})
+		c.JSON(http.StatusForbidden, gin.H{"detail": "管理员账号未激活或已过期"})
 		return
 	}
 	if err := s.upsertAgentNode(manager.ID, req.NodeID, req.Version, now); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to update node"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新节点信息失败"})
 		return
 	}
 	token, err := s.tokenManager.IssueJWT(models.ActorTypeAgent, manager.ID, manager.ID, s.cfg.AgentJWTTTL)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to issue token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "令牌签发失败"})
 		return
 	}
 	if err := s.redisStore.SaveAgentSession(
@@ -2150,7 +2166,7 @@ func (s *Server) agentLogin(c *gin.Context) {
 		req.NodeID,
 		s.cfg.AgentJWTTTL,
 	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to save redis agent session"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存Redis Agent会话失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"token": token, "manager_id": manager.ID, "node_id": req.NodeID})
@@ -2258,7 +2274,7 @@ func (s *Server) agentPollJobs(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to poll jobs"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取任务失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"jobs": leasedJobs, "lease_until": leaseUntil})
@@ -2302,11 +2318,11 @@ func (s *Server) updateJobStatusByAgent(c *gin.Context, eventType string, nextSt
 
 	owned, err := s.redisStore.IsJobLeaseOwner(ctx, managerID, jobID, req.NodeID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to check redis lease owner"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "检查Redis租约所有者失败"})
 		return
 	}
 	if !owned {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "redis lease owner mismatch"})
+		c.JSON(http.StatusForbidden, gin.H{"detail": "Redis租约所有者不匹配"})
 		return
 	}
 
@@ -2344,7 +2360,7 @@ func (s *Server) updateJobStatusByAgent(c *gin.Context, eventType string, nextSt
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "job not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "任务不存在"})
 			return
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
@@ -2354,11 +2370,11 @@ func (s *Server) updateJobStatusByAgent(c *gin.Context, eventType string, nextSt
 	if eventType == "heartbeat" || eventType == "start" {
 		refreshed, leaseErr := s.redisStore.RefreshJobLease(ctx, managerID, jobID, req.NodeID, leaseTTL)
 		if leaseErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to refresh redis lease"})
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "刷新Redis租约失败"})
 			return
 		}
 		if !refreshed {
-			c.JSON(http.StatusConflict, gin.H{"detail": "redis lease refresh conflict"})
+			c.JSON(http.StatusConflict, gin.H{"detail": "Redis租约刷新冲突"})
 			return
 		}
 	}
@@ -2547,11 +2563,11 @@ func (s *Server) upsertAgentNodeTx(tx *gorm.DB, managerID uint, nodeID, version 
 func (s *Server) managerOwnsUser(c *gin.Context, managerID, userID uint) bool {
 	var count int64
 	if err := s.db.Model(&models.User{}).Where("id = ? AND manager_id = ?", userID, managerID).Count(&count).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to verify user owner"})
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "验证用户归属失败"})
 		return false
 	}
 	if count == 0 {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "user not under this manager"})
+		c.JSON(http.StatusForbidden, gin.H{"detail": "该用户不在此管理员下"})
 		return false
 	}
 	return true
@@ -2675,19 +2691,35 @@ func (s *Server) queryUserLogsPaginated(managerID, userID uint, pg paginationPar
 		return nil, 0, err
 	}
 
-	var events []models.TaskJobEvent
-	if err := baseQuery.Order("task_job_events.event_at desc").Offset(pg.Offset).Limit(pg.PageSize).Find(&events).Error; err != nil {
+	type logRow struct {
+		ID        uint      `gorm:"column:id"`
+		JobID     uint      `gorm:"column:job_id"`
+		EventType string    `gorm:"column:event_type"`
+		Message   string    `gorm:"column:message"`
+		ErrorCode string    `gorm:"column:error_code"`
+		EventAt   time.Time `gorm:"column:event_at"`
+		TaskType  string    `gorm:"column:task_type"`
+		JobStatus string    `gorm:"column:job_status"`
+	}
+	var rows []logRow
+	if err := baseQuery.
+		Select("task_job_events.id, task_job_events.job_id, task_job_events.event_type, task_job_events.message, task_job_events.error_code, task_job_events.event_at, task_jobs.task_type, task_jobs.status AS job_status").
+		Order("task_job_events.event_at desc").
+		Offset(pg.Offset).Limit(pg.PageSize).
+		Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 
-	result := make([]gin.H, 0, len(events))
-	for _, e := range events {
+	result := make([]gin.H, 0, len(rows))
+	for _, r := range rows {
 		result = append(result, gin.H{
-			"job_id":     e.JobID,
-			"event_type": e.EventType,
-			"message":    e.Message,
-			"error_code": e.ErrorCode,
-			"event_at":   e.EventAt,
+			"job_id":     r.JobID,
+			"task_type":  r.TaskType,
+			"event_type": r.EventType,
+			"job_status": r.JobStatus,
+			"message":    r.Message,
+			"error_code": r.ErrorCode,
+			"event_at":   r.EventAt,
 		})
 	}
 	return result, total, nil
@@ -2723,7 +2755,7 @@ func isUserStatus(status string) bool {
 func parseUintParam(c *gin.Context, key string) (uint, bool) {
 	id, err := strconv.Atoi(c.Param(key))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid " + key})
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的" + key})
 		return 0, false
 	}
 	return uint(id), true

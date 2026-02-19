@@ -4,8 +4,9 @@
       <div class="panel-headline">
         <h3>用户 {{ selectedUserId }}（{{ selectedUserAccountNo }}）执行日志</h3>
         <div class="row-actions">
-          <el-input v-model="eventTypeFilter" placeholder="按事件类型筛选" clearable style="width:180px" />
+          <el-input v-model="keyword" placeholder="按任务类型或事件类型搜索" clearable style="width:220px" />
           <el-button plain :loading="loading.logs" @click="loadLogs">刷新</el-button>
+          <el-button type="danger" plain :loading="loading.clear" @click="clearLogs">清空日志</el-button>
         </div>
       </div>
 
@@ -67,7 +68,7 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { managerApi, parseApiError } from "../../lib/http";
 import { formatTime } from "../../lib/helpers";
 import { usePagination } from "../../composables/usePagination";
@@ -79,13 +80,17 @@ const props = defineProps({
   selectedUserAccountNo: { type: String, default: "" },
 });
 
-const loading = reactive({ logs: false });
+const loading = reactive({ logs: false, clear: false });
 const logs = ref([]);
-const eventTypeFilter = ref("");
+const keyword = ref("");
 const filteredLogs = computed(() => {
-  if (!eventTypeFilter.value) return logs.value;
-  const q = eventTypeFilter.value.toLowerCase();
-  return logs.value.filter((log) => (log.event_type || "").toLowerCase().includes(q));
+  if (!keyword.value) return logs.value;
+  const q = keyword.value.toLowerCase();
+  return logs.value.filter(
+    (log) =>
+      (log.event_type || "").toLowerCase().includes(q) ||
+      (log.task_type || "").toLowerCase().includes(q),
+  );
 });
 
 const { pagination, updateTotal, paginationParams } = usePagination({ defaultPageSize: 50 });
@@ -121,11 +126,37 @@ async function loadLogs() {
   }
 }
 
+async function clearLogs() {
+  if (!props.selectedUserId || !props.token) return;
+  try {
+    await ElMessageBox.confirm("确定要清空该用户的所有执行日志吗？此操作不可撤销。", "确认清空", {
+      confirmButtonText: "确定清空",
+      cancelButtonText: "取消",
+      type: "warning",
+    });
+  } catch {
+    return;
+  }
+  loading.clear = true;
+  try {
+    await managerApi.deleteUserLogs(props.token, props.selectedUserId);
+    ElMessage.success("日志已清空");
+    logs.value = [];
+    updateTotal(0);
+    pagination.page = 1;
+  } catch (error) {
+    ElMessage.error(parseApiError(error));
+  } finally {
+    loading.clear = false;
+  }
+}
+
 watch(
   () => props.selectedUserId,
   async (newId) => {
     if (newId && props.token) {
       pagination.page = 1;
+      keyword.value = "";
       await loadLogs();
     } else {
       logs.value = [];
