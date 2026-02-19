@@ -19,7 +19,7 @@
           <ActivationCodesTab :token="token" />
         </el-tab-pane>
 
-        <el-tab-pane label="下属配置" name="users">
+        <el-tab-pane label="账号管理" name="users">
           <UsersTab
             :token="token"
             :selected-user-id="selectedUserId"

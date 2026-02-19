@@ -69,10 +69,6 @@ type userRedeemCodeRequest struct {
 	Code string `json:"code" binding:"required,min=6,max=64"`
 }
 
-type userLogoutRequest struct {
-	All bool `json:"all"`
-}
-
 type agentLoginRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=64"`
 	Password string `json:"password" binding:"required,min=6,max=128"`

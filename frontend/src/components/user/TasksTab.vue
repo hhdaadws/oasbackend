@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { parseApiError, userApi } from "../../lib/http";
-import { userTypeLabel, isHHmmPattern, ensureTaskConfig, parseTaskConfigFromRaw } from "../../lib/helpers";
+import { userTypeLabel, ensureTaskConfig, parseTaskConfigFromRaw } from "../../lib/helpers";
 import { useTaskTemplates } from "../../composables/useTaskTemplates";
 
 const props = defineProps({
@@ -24,11 +24,7 @@ function buildTaskRows(config) {
   const tpl = currentTemplate.value;
   taskRows.value = tpl.order.map((name) => {
     const cfg = reactive(ensureTaskConfig(config[name]));
-    return {
-      name,
-      config: cfg,
-      _nextTimeMode: isHHmmPattern(cfg.next_time) ? "daily" : "datetime",
-    };
+    return { name, config: cfg };
   });
 }
 
@@ -117,30 +113,13 @@ async function saveMeTasks() {
             <el-switch v-model="scope.row.config.enabled" />
           </template>
         </el-table-column>
-        <el-table-column label="执行时间" min-width="280">
+        <el-table-column label="执行时间" min-width="200">
           <template #default="scope">
-            <div class="next-time-row">
-              <el-radio-group
-                v-model="scope.row._nextTimeMode"
-                size="small"
-                @change="(mode) => { if (mode === 'daily' && !isHHmmPattern(scope.row.config.next_time)) scope.row.config.next_time = '08:00'; }"
-              >
-                <el-radio-button value="daily">每日</el-radio-button>
-                <el-radio-button value="datetime">指定</el-radio-button>
-              </el-radio-group>
-              <el-time-select
-                v-if="scope.row._nextTimeMode === 'daily'"
-                v-model="scope.row.config.next_time"
-                start="00:00" end="23:30" step="00:30"
-                placeholder="时:分" size="small" style="width: 100px"
-              />
-              <el-date-picker
-                v-else
-                v-model="scope.row.config.next_time"
-                type="datetime" value-format="YYYY-MM-DD HH:mm"
-                placeholder="选择日期时间" size="small" style="width: 170px"
-              />
-            </div>
+            <el-date-picker
+              v-model="scope.row.config.next_time"
+              type="datetime" value-format="YYYY-MM-DD HH:mm"
+              placeholder="选择执行时间" size="small" style="width: 180px"
+            />
           </template>
         </el-table-column>
         <el-table-column label="失败延迟(分)" width="130" align="center">

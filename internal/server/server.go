@@ -1270,6 +1270,8 @@ func (s *Server) managerListUsers(c *gin.Context) {
 			"manager_id": user.ManagerID,
 			"user_type":  user.UserType,
 			"status":     user.Status,
+			"server":     user.Server,
+			"username":   user.Username,
 			"is_expired": isExpired,
 			"expires_at": user.ExpiresAt,
 			"created_by": user.CreatedBy,
@@ -1991,6 +1993,8 @@ func (s *Server) userGetMeProfile(c *gin.Context) {
 		"manager_id":    user.ManagerID,
 		"user_type":     models.NormalizeUserType(user.UserType),
 		"status":        user.Status,
+		"server":        user.Server,
+		"username":      user.Username,
 		"expires_at":    user.ExpiresAt,
 		"assets":        deepMergeMap(taskmeta.BuildDefaultUserAssets(), map[string]any(user.Assets)),
 		"token_exp":     token.ExpiresAt,
@@ -2000,30 +2004,20 @@ func (s *Server) userGetMeProfile(c *gin.Context) {
 }
 
 func (s *Server) userLogout(c *gin.Context) {
-	var req userLogoutRequest
-	if raw := strings.TrimSpace(c.GetHeader("Content-Length")); raw != "" && raw != "0" {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
-			return
-		}
-	}
-
 	userID := getUint(c, ctxUserIDKey)
 	tokenID := getUint(c, ctxUserTokenIDKey)
 	now := time.Now().UTC()
 
-	query := s.db.Model(&models.UserToken{}).Where("user_id = ? AND revoked_at IS NULL", userID)
-	if !req.All {
-		query = query.Where("id = ?", tokenID)
-	}
-	result := query.Updates(map[string]any{"revoked_at": now})
+	result := s.db.Model(&models.UserToken{}).
+		Where("id = ? AND user_id = ? AND revoked_at IS NULL", tokenID, userID).
+		Updates(map[string]any{"revoked_at": now})
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "撤销令牌失败"})
 		return
 	}
 
-	s.audit(models.ActorTypeUser, userID, "user_logout", "user_token", tokenID, datatypes.JSONMap{"all": req.All}, c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{"message": "logout success", "revoked": result.RowsAffected, "all": req.All})
+	s.audit(models.ActorTypeUser, userID, "user_logout", "user_token", tokenID, datatypes.JSONMap{}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "logout success", "revoked": result.RowsAffected})
 }
 
 func (s *Server) userGetMeAssets(c *gin.Context) {

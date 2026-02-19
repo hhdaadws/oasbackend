@@ -49,7 +49,6 @@ export function parseTaskConfigFromRaw(rawString) {
 }
 
 export const ASSET_FIELDS = [
-  { key: "level", label: "等级" },
   { key: "stamina", label: "体力" },
   { key: "gouyu", label: "勾玉" },
   { key: "lanpiao", label: "蓝票" },
@@ -77,7 +76,7 @@ export function formatTime(isoString) {
 }
 
 export function statusLabel(status) {
-  const map = { active: "活跃", expired: "已过期", disabled: "已禁用" };
+  const map = { active: "未过期", expired: "已过期", disabled: "已禁用" };
   return map[status] || status || "-";
 }
 

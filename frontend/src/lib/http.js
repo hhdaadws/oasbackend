@@ -277,11 +277,10 @@ export const userApi = {
     request({ method: "POST", url: "/user/auth/register-by-code", data: payload }),
   login: (payload) =>
     request({ method: "POST", url: "/user/auth/login", data: payload }),
-  logout: (token, payload = { all: false }) =>
+  logout: (token) =>
     request({
       method: "POST",
       url: "/user/auth/logout",
-      data: payload,
       headers: withBearer(token),
     }),
   getMeProfile: (token) =>

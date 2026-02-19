@@ -36,7 +36,7 @@ func TestUserLogoutRevokesCurrentToken(t *testing.T) {
 		srv.router,
 		http.MethodPost,
 		"/api/v1/user/auth/logout",
-		map[string]any{"all": false},
+		map[string]any{},
 		rawToken,
 	)
 	if logoutResp.Code != http.StatusOK {

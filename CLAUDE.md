@@ -1,5 +1,6 @@
 # CLAUDE.md
 中文回答
+修改后端后重新用go部署 前端也是  禁止用docker启动
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview

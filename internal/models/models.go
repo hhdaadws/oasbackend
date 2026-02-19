@@ -73,6 +73,8 @@ type User struct {
 	ManagerID uint              `gorm:"not null;index"`
 	UserType  string            `gorm:"size:20;not null;default:daily;index"`
 	Status    string            `gorm:"size:20;not null;default:expired;index"`
+	Server    string            `gorm:"size:128;not null;default:''"`
+	Username  string            `gorm:"size:128;not null;default:''"`
 	ExpiresAt *time.Time        `gorm:"index"`
 	Assets    datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
 	CreatedBy string            `gorm:"size:30;not null"`

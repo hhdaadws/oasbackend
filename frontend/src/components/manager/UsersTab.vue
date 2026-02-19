@@ -16,9 +16,8 @@
       <div class="filter-row" style="margin-bottom:12px">
         <el-input v-model="filters.keyword" placeholder="搜索账号" clearable />
         <el-select v-model="filters.status" clearable placeholder="状态过滤">
-          <el-option label="活跃" value="active" />
+          <el-option label="未过期" value="active" />
           <el-option label="已过期" value="expired" />
-          <el-option label="已禁用" value="disabled" />
         </el-select>
         <el-select v-model="filters.userType" clearable placeholder="类型过滤">
           <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -31,16 +30,12 @@
           <strong class="stat-value">{{ userSummary.total }}</strong>
         </div>
         <div class="stat-item">
-          <span class="stat-label">活跃</span>
+          <span class="stat-label">未过期</span>
           <strong class="stat-value">{{ userSummary.active }}</strong>
         </div>
         <div class="stat-item">
           <span class="stat-label">已过期</span>
           <strong class="stat-value">{{ userSummary.expired }}</strong>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">已禁用</span>
-          <strong class="stat-value">{{ userSummary.disabled }}</strong>
         </div>
         <div class="stat-item">
           <span class="stat-label">日常</span>
@@ -81,6 +76,8 @@
               <el-tag type="info">{{ userTypeLabel(scope.row.user_type) }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column prop="server" label="服务器" min-width="120" />
+          <el-table-column prop="username" label="用户名" min-width="120" />
           <el-table-column prop="status" label="状态" width="120" sortable>
             <template #default="scope">
               <el-tag :type="statusTagType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag>
@@ -155,7 +152,7 @@
       </div>
 
       <el-tabs>
-        <el-tab-pane label="生命周期">
+        <el-tab-pane label="过期时间">
           <el-form :model="lifecycleForm" label-width="100px" style="margin-top:12px">
             <el-form-item label="延长天数">
               <el-input-number v-model="lifecycleForm.extend_days" :min="0" :max="3650" />
@@ -166,13 +163,12 @@
             </el-form-item>
             <el-form-item label="状态">
               <el-select v-model="lifecycleForm.status" clearable placeholder="自动判定" style="width:120px">
-                <el-option label="活跃" value="active" />
+                <el-option label="未过期" value="active" />
                 <el-option label="已过期" value="expired" />
-                <el-option label="已禁用" value="disabled" />
               </el-select>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="loading.lifecycle" @click="saveUserLifecycle">更新生命周期</el-button>
+              <el-button type="primary" :loading="loading.lifecycle" @click="saveUserLifecycle">保存</el-button>
             </el-form-item>
           </el-form>
         </el-tab-pane>
@@ -200,30 +196,13 @@
                     <el-switch v-model="scope.row.config.enabled" />
                   </template>
                 </el-table-column>
-                <el-table-column label="执行时间" min-width="280">
+                <el-table-column label="执行时间" min-width="200">
                   <template #default="scope">
-                    <div class="next-time-row">
-                      <el-radio-group
-                        v-model="scope.row._nextTimeMode"
-                        size="small"
-                        @change="(mode) => { if (mode === 'daily' && !isHHmmPattern(scope.row.config.next_time)) scope.row.config.next_time = '08:00'; }"
-                      >
-                        <el-radio-button value="daily">每日</el-radio-button>
-                        <el-radio-button value="datetime">指定</el-radio-button>
-                      </el-radio-group>
-                      <el-time-select
-                        v-if="scope.row._nextTimeMode === 'daily'"
-                        v-model="scope.row.config.next_time"
-                        start="00:00" end="23:30" step="00:30"
-                        placeholder="时:分" size="small" style="width: 100px"
-                      />
-                      <el-date-picker
-                        v-else
-                        v-model="scope.row.config.next_time"
-                        type="datetime" value-format="YYYY-MM-DD HH:mm"
-                        placeholder="选择日期时间" size="small" style="width: 170px"
-                      />
-                    </div>
+                    <el-date-picker
+                      v-model="scope.row.config.next_time"
+                      type="datetime" value-format="YYYY-MM-DD HH:mm"
+                      placeholder="选择执行时间" size="small" style="width: 180px"
+                    />
                   </template>
                 </el-table-column>
                 <el-table-column label="失败延迟(分)" width="130" align="center">
@@ -319,7 +298,6 @@ import {
   patchSummary,
   ensureTaskConfig,
   parseTaskConfigFromRaw,
-  isHHmmPattern,
   ASSET_FIELDS,
   USER_TYPE_OPTIONS,
   copyToClipboard,
@@ -379,7 +357,6 @@ const batchLifecycleForm = reactive({
 });
 
 const batchAssetsForm = reactive({
-  level: 1,
   stamina: 0,
   gouyu: 0,
   lanpiao: 0,
@@ -399,7 +376,6 @@ const lifecycleForm = reactive({
 });
 
 const selectedUserAssets = reactive({
-  level: 1,
   stamina: 0,
   gouyu: 0,
   lanpiao: 0,
@@ -447,11 +423,7 @@ function buildTaskRows(config) {
   const tpl = currentTemplate.value;
   taskRows.value = tpl.order.map((name) => {
     const cfg = reactive(ensureTaskConfig(config[name]));
-    return {
-      name,
-      config: cfg,
-      _nextTimeMode: isHHmmPattern(cfg.next_time) ? "daily" : "datetime",
-    };
+    return { name, config: cfg };
   });
 }
 

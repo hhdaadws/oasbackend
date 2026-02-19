@@ -146,7 +146,6 @@ var defaultTaskConfig = map[string]map[string]any{
 }
 
 var defaultUserAssets = map[string]any{
-	"level":       1,
 	"stamina":     0,
 	"gouyu":       0,
 	"lanpiao":     0,
