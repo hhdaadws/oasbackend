@@ -83,6 +83,11 @@
               <el-tag :type="statusTagType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="存档状态" width="120">
+            <template #default="scope">
+              <el-tag :type="scope.row.archive_status === 'normal' ? 'success' : 'danger'">{{ scope.row.archive_status === 'normal' ? '正常' : '失效' }}</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="到期时间" min-width="190" sortable>
             <template #default="scope">{{ formatTime(scope.row.expires_at) }}</template>
           </el-table-column>
@@ -165,6 +170,12 @@
               <el-select v-model="lifecycleForm.status" clearable placeholder="自动判定" style="width:120px">
                 <el-option label="未过期" value="active" />
                 <el-option label="已过期" value="expired" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="存档状态">
+              <el-select v-model="lifecycleForm.archive_status" clearable placeholder="不改变" style="width:120px">
+                <el-option label="正常" value="normal" />
+                <el-option label="失效" value="invalid" />
               </el-select>
             </el-form-item>
             <el-form-item>
@@ -373,6 +384,7 @@ const lifecycleForm = reactive({
   extend_days: 0,
   expires_at: "",
   status: "",
+  archive_status: "",
 });
 
 const selectedUserAssets = reactive({
@@ -505,6 +517,7 @@ async function selectUser(row) {
   lifecycleForm.expires_at = row.expires_at || "";
   lifecycleForm.extend_days = 0;
   lifecycleForm.status = "";
+  lifecycleForm.archive_status = "";
   showUserDetailDialog.value = true;
   await props.ensureTaskTemplates(row.user_type || "daily", userTypeOptions);
   await Promise.all([loadSelectedUserTasks(), loadSelectedUserAssets()]);
@@ -595,8 +608,9 @@ async function saveUserLifecycle() {
   const trimmedExpires = (lifecycleForm.expires_at || "").trim();
   if (trimmedExpires) payload.expires_at = trimmedExpires;
   if (lifecycleForm.status) payload.status = lifecycleForm.status;
+  if (lifecycleForm.archive_status) payload.archive_status = lifecycleForm.archive_status;
   if (Object.keys(payload).length === 0) {
-    ElMessage.warning("请填写到期时间、延长天数或状态");
+    ElMessage.warning("请填写至少一个字段");
     return;
   }
   loading.lifecycle = true;
@@ -605,6 +619,7 @@ async function saveUserLifecycle() {
     ElMessage.success("用户过期时间/状态更新成功");
     lifecycleForm.extend_days = 0;
     lifecycleForm.status = "";
+    lifecycleForm.archive_status = "";
     await loadUsers();
     const updatedUser = users.value.find((u) => u.id === props.selectedUserId);
     if (updatedUser) {

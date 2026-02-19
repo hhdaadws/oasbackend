@@ -32,7 +32,7 @@ const activeTab = ref("account");
         <el-tab-pane label="账号信息" name="account">
           <AccountTab :token="token" :account-no="accountNo" @logout="$emit('logout')" />
         </el-tab-pane>
-        <el-tab-pane label="激活码续费" name="redeem">
+        <el-tab-pane label="续费" name="redeem">
           <RedeemTab :token="token" />
         </el-tab-pane>
         <el-tab-pane label="我的资产" name="assets">
@@ -44,7 +44,7 @@ const activeTab = ref("account");
         <el-tab-pane label="执行日志" name="logs">
           <UserLogsTab :token="token" />
         </el-tab-pane>
-        <el-tab-pane label="通知设置" name="notify">
+        <el-tab-pane label="通知管理" name="notify">
           <NotifyTab :token="token" />
         </el-tab-pane>
       </el-tabs>

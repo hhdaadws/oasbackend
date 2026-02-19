@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { parseApiError, superApi } from "../../lib/http";
-import { statusTagType, statusLabel, formatTime, patchSummary } from "../../lib/helpers";
+import { formatTime, patchSummary } from "../../lib/helpers";
 import { usePagination } from "../../composables/usePagination";
 import { useBatchSelection } from "../../composables/useBatchSelection";
 import { useDebouncedFilter } from "../../composables/useDebouncedFilter";
@@ -14,22 +14,21 @@ const props = defineProps({
 });
 
 const loading = reactive({ list: false, batch: false });
-const filters = reactive({ keyword: "", status: "" });
-const managerSummary = reactive({ total: 0, active: 0, expired: 0, disabled: 0, expiring_7d: 0 });
+const filters = reactive({ keyword: "" });
+const managerSummary = reactive({ total: 0, active: 0, expired: 0, expiring_7d: 0 });
 const managers = ref([]);
 const tableRef = ref(null);
 
-const batchForm = reactive({ extend_days: 30, status: "" });
+const batchForm = reactive({ extend_days: 30 });
 
 const showEditDialog = ref(false);
 const editingManager = ref(null);
-const editForm = reactive({ expires_at: "", extend_days: 0, status: "" });
+const editForm = reactive({ expires_at: "", extend_days: 0 });
 
 function openEditDialog(row) {
   editingManager.value = row;
   editForm.expires_at = row.expires_at || "";
   editForm.extend_days = 0;
-  editForm.status = row.status || "";
   showEditDialog.value = true;
 }
 
@@ -66,14 +65,13 @@ async function loadManagers() {
   try {
     const response = await superApi.listManagers(props.token, {
       keyword: filters.keyword || undefined,
-      status: filters.status || undefined,
       ...paginationParams(),
     });
     managers.value = (response.items || []).map((item) => ({
       ...item,
       _updating: false,
     }));
-    patchSummary(managerSummary, response.summary, ["total", "active", "expired", "disabled", "expiring_7d"]);
+    patchSummary(managerSummary, response.summary, ["total", "active", "expired", "expiring_7d"]);
     updateTotal(response.total || 0);
   } catch (error) {
     ElMessage.error(parseApiError(error));
@@ -86,15 +84,14 @@ async function saveManagerLifecycle() {
   if (!editingManager.value?.id) { ElMessage.warning("无效管理员记录"); return; }
   const expiresAt = String(editForm.expires_at || "").trim();
   const extendDays = Number(editForm.extend_days || 0);
-  if (!expiresAt && extendDays <= 0 && !editForm.status) {
-    ElMessage.warning("请填写到期时间、延长天数或状态");
+  if (!expiresAt && extendDays <= 0) {
+    ElMessage.warning("请填写到期时间或延长天数");
     return;
   }
   editingManager.value._updating = true;
   const payload = {};
   if (expiresAt) payload.expires_at = expiresAt;
   if (extendDays > 0) payload.extend_days = extendDays;
-  if (editForm.status) payload.status = editForm.status;
   try {
     await superApi.patchManagerLifecycle(props.token, editingManager.value.id, payload);
     ElMessage.success(`管理员 ${editingManager.value.username} 生命周期已更新`);
@@ -137,32 +134,6 @@ async function batchExtendManagers() {
   }
 }
 
-async function batchSetManagerStatus() {
-  if (!hasSelection.value) return;
-  if (!batchForm.status) { ElMessage.warning("请选择目标状态"); return; }
-  try {
-    await ElMessageBox.confirm(
-      `确定要将 ${selectedCount.value} 个管理员的状态设为"${statusLabel(batchForm.status)}"吗？`,
-      "确认批量更新状态",
-      { confirmButtonText: "确定", cancelButtonText: "取消", type: "warning" },
-    );
-  } catch { return; }
-  loading.batch = true;
-  try {
-    const res = await superApi.batchManagerStatus(props.token, {
-      manager_ids: selectedIds.value,
-      status: batchForm.status,
-    });
-    ElMessage.success(`已更新 ${res.updated} 个管理员`);
-    clearSelection();
-    if (tableRef.value) tableRef.value.clearSelection();
-    await loadManagers();
-  } catch (error) {
-    ElMessage.error(parseApiError(error));
-  } finally {
-    loading.batch = false;
-  }
-}
 </script>
 
 <template>
@@ -174,13 +145,6 @@ async function batchSetManagerStatus() {
     <el-form label-width="100px" class="compact-form">
       <el-form-item label="关键词">
         <el-input v-model="filters.keyword" placeholder="按账号过滤" clearable />
-      </el-form-item>
-      <el-form-item label="状态">
-        <el-select v-model="filters.status" clearable placeholder="全部状态">
-          <el-option label="活跃" value="active" />
-          <el-option label="已过期" value="expired" />
-          <el-option label="已禁用" value="disabled" />
-        </el-select>
       </el-form-item>
     </el-form>
   </section>
@@ -202,10 +166,6 @@ async function batchSetManagerStatus() {
       <div class="stat-item">
         <span class="stat-label">已过期</span>
         <strong class="stat-value">{{ managerSummary.expired }}</strong>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">已禁用</span>
-        <strong class="stat-value">{{ managerSummary.disabled }}</strong>
       </div>
       <div class="stat-item">
         <span class="stat-label">7天内到期</span>
@@ -238,11 +198,6 @@ async function batchSetManagerStatus() {
             <span class="clickable-cell" @click="copyUsername(scope.row.username)" title="点击复制">{{ scope.row.username }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="130" sortable>
-          <template #default="scope">
-            <el-tag :type="statusTagType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag>
-          </template>
-        </el-table-column>
         <el-table-column label="到期标记" width="130" sortable>
           <template #default="scope">
             <el-tag :type="scope.row.is_expired ? 'warning' : 'success'">
@@ -264,12 +219,6 @@ async function batchSetManagerStatus() {
     <BatchActionBar :selected-count="selectedCount" @clear="() => { clearSelection(); tableRef?.clearSelection(); }">
       <el-input-number v-model="batchForm.extend_days" :min="1" :max="3650" size="small" style="width: 100px" />
       <el-button type="primary" :loading="loading.batch" @click="batchExtendManagers">批量延长</el-button>
-      <el-select v-model="batchForm.status" placeholder="状态" size="small" style="width: 100px">
-        <el-option label="活跃" value="active" />
-        <el-option label="已过期" value="expired" />
-        <el-option label="已禁用" value="disabled" />
-      </el-select>
-      <el-button type="warning" :loading="loading.batch" @click="batchSetManagerStatus">批量设置状态</el-button>
     </BatchActionBar>
 
     <div class="pagination-wrapper">
@@ -295,13 +244,6 @@ async function batchSetManagerStatus() {
       </el-form-item>
       <el-form-item label="延长天数">
         <el-input-number v-model="editForm.extend_days" :min="0" :max="3650" style="width:100%" />
-      </el-form-item>
-      <el-form-item label="状态">
-        <el-select v-model="editForm.status" clearable placeholder="不改变" style="width:100%">
-          <el-option label="活跃" value="active" />
-          <el-option label="已过期" value="expired" />
-          <el-option label="已禁用" value="disabled" />
-        </el-select>
       </el-form-item>
     </el-form>
     <template #footer>

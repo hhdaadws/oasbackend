@@ -210,7 +210,6 @@ func createActiveManager(t *testing.T, db *gorm.DB, username string, password st
 	manager := models.Manager{
 		Username:     username,
 		PasswordHash: hash,
-		Status:       models.ManagerStatusActive,
 		ExpiresAt:    &expireAt,
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),

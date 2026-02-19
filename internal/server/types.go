@@ -14,10 +14,6 @@ type createRenewalKeyRequest struct {
 	DurationDays int `json:"duration_days" binding:"required,min=1,max=3650"`
 }
 
-type patchManagerStatusRequest struct {
-	Status string `json:"status" binding:"required,oneof=active expired disabled"`
-}
-
 type patchCodeStatusRequest struct {
 	Status string `json:"status" binding:"required,oneof=revoked"`
 }
@@ -41,15 +37,15 @@ type putTaskConfigRequest struct {
 }
 
 type managerPatchUserLifecycleRequest struct {
-	ExpiresAt  string `json:"expires_at"`
-	ExtendDays int    `json:"extend_days"`
-	Status     string `json:"status"`
+	ExpiresAt     string `json:"expires_at"`
+	ExtendDays    int    `json:"extend_days"`
+	Status        string `json:"status"`
+	ArchiveStatus string `json:"archive_status"`
 }
 
 type superPatchManagerLifecycleRequest struct {
 	ExpiresAt  string `json:"expires_at"`
 	ExtendDays int    `json:"extend_days"`
-	Status     string `json:"status"`
 }
 
 type putUserAssetsRequest struct {
@@ -111,12 +107,6 @@ type batchManagerLifecycleRequest struct {
 	ManagerIDs []uint `json:"manager_ids" binding:"required,min=1,max=200"`
 	ExpiresAt  string `json:"expires_at"`
 	ExtendDays int    `json:"extend_days"`
-	Status     string `json:"status"`
-}
-
-type batchManagerStatusRequest struct {
-	ManagerIDs []uint `json:"manager_ids" binding:"required,min=1,max=200"`
-	Status     string `json:"status" binding:"required,oneof=active expired disabled"`
 }
 
 type batchRenewalKeyRevokeRequest struct {

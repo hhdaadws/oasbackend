@@ -81,13 +81,6 @@ export const superApi = {
       data: payload,
       headers: withBearer(token),
     }),
-  patchManagerStatus: (token, managerId, payload) =>
-    request({
-      method: "PATCH",
-      url: `/super/managers/${managerId}/status`,
-      data: payload,
-      headers: withBearer(token),
-    }),
   patchManagerLifecycle: (token, managerId, payload) =>
     request({
       method: "PATCH",
@@ -99,13 +92,6 @@ export const superApi = {
     request({
       method: "POST",
       url: "/super/managers/batch-lifecycle",
-      data: payload,
-      headers: withBearer(token),
-    }),
-  batchManagerStatus: (token, payload) =>
-    request({
-      method: "POST",
-      url: "/super/managers/batch-status",
       data: payload,
       headers: withBearer(token),
     }),
@@ -287,6 +273,13 @@ export const userApi = {
     request({
       method: "GET",
       url: "/user/me/profile",
+      headers: withBearer(token),
+    }),
+  putMeProfile: (token, payload) =>
+    request({
+      method: "PUT",
+      url: "/user/me/profile",
+      data: payload,
       headers: withBearer(token),
     }),
   getMeAssets: (token) =>

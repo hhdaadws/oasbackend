@@ -14,7 +14,6 @@ func TestExpiredManagerCanLoginAndRedeemRenewalKey(t *testing.T) {
 	manager := createActiveManager(t, db, "manager_expired_case", "passwordExpired123")
 	expiredAt := time.Now().UTC().Add(-2 * time.Hour)
 	if err := db.Model(&models.Manager{}).Where("id = ?", manager.ID).Updates(map[string]any{
-		"status":     models.ManagerStatusExpired,
 		"expires_at": expiredAt,
 		"updated_at": time.Now().UTC(),
 	}).Error; err != nil {
@@ -146,8 +145,8 @@ func TestSuperListManagersUsesSnakeCaseFields(t *testing.T) {
 	if _, ok := first["username"]; !ok {
 		t.Fatalf("manager payload should contain snake_case username field")
 	}
-	if _, ok := first["status"]; !ok {
-		t.Fatalf("manager payload should contain snake_case status field")
+	if _, ok := first["is_expired"]; !ok {
+		t.Fatalf("manager payload should contain snake_case is_expired field")
 	}
 	if _, ok := first["expires_at"]; !ok {
 		t.Fatalf("manager payload should contain snake_case expires_at field")

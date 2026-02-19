@@ -11,7 +11,7 @@
           <strong class="stat-value">{{ overview.user_stats.total }}</strong>
         </div>
         <div class="stat-item">
-          <span class="stat-label">活跃下属</span>
+          <span class="stat-label">未过期账号</span>
           <strong class="stat-value">{{ overview.user_stats.active }}</strong>
         </div>
         <div class="stat-item">
@@ -21,10 +21,6 @@
         <div class="stat-item">
           <span class="stat-label">运行中任务</span>
           <strong class="stat-value">{{ overview.job_stats.running }}</strong>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">24h 失败数</span>
-          <strong class="stat-value">{{ overview.recent_failures_24h }}</strong>
         </div>
         <div class="stat-item">
           <span class="stat-label">最近刷新</span>
@@ -37,7 +33,7 @@
       <article class="panel-card panel-card--highlight">
         <div class="panel-headline">
           <h3>管理员账号状态</h3>
-          <el-tag :type="statusTagType(managerProfile.status)">{{ statusLabel(managerProfile.status) }}</el-tag>
+          <el-tag :type="managerProfile.expired ? 'warning' : 'success'">{{ managerProfile.expired ? '已过期' : '未过期' }}</el-tag>
         </div>
         <div class="stats-grid">
           <div class="stat-item">
@@ -81,7 +77,7 @@
 import { onMounted, reactive, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { managerApi, parseApiError } from "../../lib/http";
-import { statusTagType, statusLabel, formatTime } from "../../lib/helpers";
+import { formatTime } from "../../lib/helpers";
 
 const props = defineProps({
   token: {
@@ -103,7 +99,6 @@ const redeemForm = reactive({ code: "" });
 const managerProfile = reactive({
   id: 0,
   username: "",
-  status: "",
   expires_at: "",
   expired: false,
 });
@@ -113,7 +108,6 @@ const overview = reactive({
     total: 0,
     active: 0,
     expired: 0,
-    disabled: 0,
   },
   job_stats: {
     pending: 0,
@@ -122,7 +116,6 @@ const overview = reactive({
     success: 0,
     failed: 0,
   },
-  recent_failures_24h: 0,
   generated_at: "",
 });
 
@@ -138,7 +131,6 @@ async function loadOverview() {
       ...overview.job_stats,
       ...(response.job_stats || {}),
     };
-    overview.recent_failures_24h = response.recent_failures_24h || 0;
     overview.generated_at = response.generated_at || "";
   } catch (error) {
     ElMessage.error(parseApiError(error));
@@ -153,7 +145,6 @@ async function loadManagerProfile() {
     const response = await managerApi.me(props.token);
     managerProfile.id = response.id || 0;
     managerProfile.username = response.username || "";
-    managerProfile.status = response.status || "";
     managerProfile.expires_at = response.expires_at || "";
     managerProfile.expired = response.expired === true;
   } catch (error) {
@@ -189,7 +180,6 @@ watch(
     if (!value) {
       managerProfile.id = 0;
       managerProfile.username = "";
-      managerProfile.status = "";
       managerProfile.expires_at = "";
       managerProfile.expired = false;
       return;

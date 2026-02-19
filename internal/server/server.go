@@ -95,10 +95,8 @@ func (s *Server) mountRoutes() {
 		superGroup.GET("/manager-renewal-keys", s.superListManagerRenewalKeys)
 		superGroup.PATCH("/manager-renewal-keys/:id/status", s.superPatchManagerRenewalKeyStatus)
 		superGroup.GET("/managers", s.superListManagers)
-		superGroup.PATCH("/managers/:id/status", s.superPatchManagerStatus)
 		superGroup.PATCH("/managers/:id/lifecycle", s.superPatchManagerLifecycle)
 		superGroup.POST("/managers/batch-lifecycle", s.superBatchManagerLifecycle)
-		superGroup.POST("/managers/batch-status", s.superBatchManagerStatus)
 		superGroup.POST("/manager-renewal-keys/batch-revoke", s.superBatchRevokeRenewalKeys)
 		superGroup.DELETE("/manager-renewal-keys/:id", s.superDeleteManagerRenewalKey)
 		superGroup.POST("/manager-renewal-keys/batch-delete", s.superBatchDeleteRenewalKeys)
@@ -140,6 +138,7 @@ func (s *Server) mountRoutes() {
 		userGroup.POST("/auth/logout", s.userLogout)
 		userGroup.POST("/auth/redeem-code", s.userRedeemCode)
 		userGroup.GET("/me/profile", s.userGetMeProfile)
+		userGroup.PUT("/me/profile", s.userPutMeProfile)
 		userGroup.GET("/me/assets", s.userGetMeAssets)
 		userGroup.GET("/me/tasks", s.userGetMeTasks)
 		userGroup.PUT("/me/tasks", s.userPutMeTasks)
@@ -312,7 +311,6 @@ func (s *Server) managerRegister(c *gin.Context) {
 	manager := models.Manager{
 		Username:     req.Username,
 		PasswordHash: hash,
-		Status:       models.ManagerStatusExpired,
 		ExpiresAt:    &now,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -340,21 +338,16 @@ func (s *Server) managerLogin(c *gin.Context) {
 		return
 	}
 	now := time.Now().UTC()
-	if manager.Status == models.ManagerStatusDisabled {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "管理员账号已禁用"})
-		return
-	}
 	token, err := s.tokenManager.IssueJWT(models.ActorTypeManager, manager.ID, manager.ID, s.cfg.JWTTTL)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "令牌签发失败"})
 		return
 	}
-	expired := manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) || manager.Status != models.ManagerStatusActive
+	expired := manager.ExpiresAt == nil || !manager.ExpiresAt.After(now)
 	c.JSON(http.StatusOK, gin.H{
 		"token":      token,
 		"role":       models.ActorTypeManager,
 		"manager_id": manager.ID,
-		"status":     manager.Status,
 		"expires_at": manager.ExpiresAt,
 		"expired":    expired,
 	})
@@ -485,18 +478,10 @@ func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
 }
 
 func (s *Server) superListManagers(c *gin.Context) {
-	status := strings.TrimSpace(c.Query("status"))
 	keyword := strings.TrimSpace(c.Query("keyword"))
 	pg := readPagination(c, 50, 200)
-	if status != "" && !isManagerStatus(status) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
-		return
-	}
 
 	baseQuery := s.db.Model(&models.Manager{})
-	if status != "" {
-		baseQuery = baseQuery.Where("status = ?", status)
-	}
 	if keyword != "" {
 		baseQuery = baseQuery.Where("username LIKE ?", "%"+keyword+"%")
 	}
@@ -517,13 +502,13 @@ func (s *Server) superListManagers(c *gin.Context) {
 	expiringThreshold := now.Add(7 * 24 * time.Hour)
 
 	// Summary counts over full dataset (not paginated)
-	var totalAll, activeAll, expiredAll, disabledAll int64
+	var totalAll int64
 	_ = s.db.Model(&models.Manager{}).Count(&totalAll).Error
-	_ = s.db.Model(&models.Manager{}).Where("status = ?", models.ManagerStatusActive).Count(&activeAll).Error
-	_ = s.db.Model(&models.Manager{}).Where("status = ?", models.ManagerStatusExpired).Count(&expiredAll).Error
-	_ = s.db.Model(&models.Manager{}).Where("status = ?", models.ManagerStatusDisabled).Count(&disabledAll).Error
+	var activeAll int64
+	_ = s.db.Model(&models.Manager{}).Where("expires_at IS NOT NULL AND expires_at > ?", now).Count(&activeAll).Error
+	expiredAll := totalAll - activeAll
 	var expiring7dAll int64
-	_ = s.db.Model(&models.Manager{}).Where("status = ? AND expires_at > ? AND expires_at < ?", models.ManagerStatusActive, now, expiringThreshold).Count(&expiring7dAll).Error
+	_ = s.db.Model(&models.Manager{}).Where("expires_at IS NOT NULL AND expires_at > ? AND expires_at < ?", now, expiringThreshold).Count(&expiring7dAll).Error
 
 	items := make([]gin.H, 0, len(managers))
 	for _, manager := range managers {
@@ -532,7 +517,6 @@ func (s *Server) superListManagers(c *gin.Context) {
 		items = append(items, gin.H{
 			"id":         manager.ID,
 			"username":   manager.Username,
-			"status":     manager.Status,
 			"expires_at": manager.ExpiresAt,
 			"is_expired": isExpired,
 			"created_at": manager.CreatedAt,
@@ -545,7 +529,6 @@ func (s *Server) superListManagers(c *gin.Context) {
 			"total":       totalAll,
 			"active":      activeAll,
 			"expired":     expiredAll,
-			"disabled":    disabledAll,
 			"expiring_7d": expiring7dAll,
 		},
 		"total":     filteredTotal,
@@ -596,37 +579,6 @@ func (s *Server) superPatchManagerRenewalKeyStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "renewal key revoked"})
 }
 
-func (s *Server) superPatchManagerStatus(c *gin.Context) {
-	var req patchManagerStatusRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
-		return
-	}
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的管理员ID"})
-		return
-	}
-
-	updates := map[string]any{"status": req.Status, "updated_at": time.Now().UTC()}
-	if req.Status == models.ManagerStatusExpired {
-		now := time.Now().UTC()
-		updates["expires_at"] = now
-	}
-	result := s.db.Model(&models.Manager{}).Where("id = ?", id).Updates(updates)
-	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新管理员状态失败"})
-		return
-	}
-	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "管理员不存在"})
-		return
-	}
-	actorID := getUint(c, ctxActorIDKey)
-	s.audit(models.ActorTypeSuper, actorID, "patch_manager_status", "manager", uint(id), datatypes.JSONMap{"status": req.Status}, c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{"message": "manager status updated"})
-}
-
 func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	managerID, ok := parseUintParam(c, "id")
 	if !ok {
@@ -638,7 +590,7 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
+	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
 		return
 	}
@@ -655,7 +607,6 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	}
 
 	updates := map[string]any{"updated_at": now}
-	hasExpiryUpdate := false
 	if rawExpires := strings.TrimSpace(req.ExpiresAt); rawExpires != "" {
 		parsed, err := parseFlexibleDateTime(rawExpires)
 		if err != nil {
@@ -663,7 +614,6 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 			return
 		}
 		updates["expires_at"] = parsed
-		hasExpiryUpdate = true
 	}
 	if req.ExtendDays != 0 {
 		if req.ExtendDays < 0 {
@@ -672,27 +622,6 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 		}
 		newExpire := extendExpiry(manager.ExpiresAt, req.ExtendDays, now)
 		updates["expires_at"] = newExpire
-		hasExpiryUpdate = true
-	}
-
-	if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
-		if !isManagerStatus(rawStatus) {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
-			return
-		}
-		updates["status"] = rawStatus
-	} else if hasExpiryUpdate {
-		expireValue, has := updates["expires_at"]
-		if has {
-			expireTime, ok := expireValue.(time.Time)
-			if ok {
-				if expireTime.After(now) {
-					updates["status"] = models.ManagerStatusActive
-				} else {
-					updates["status"] = models.ManagerStatusExpired
-				}
-			}
-		}
 	}
 
 	if err := s.db.Model(&models.Manager{}).Where("id = ?", managerID).Updates(updates).Error; err != nil {
@@ -703,7 +632,6 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	s.audit(models.ActorTypeSuper, actorID, "patch_manager_lifecycle", "manager", managerID, datatypes.JSONMap{
 		"expires_at":  req.ExpiresAt,
 		"extend_days": req.ExtendDays,
-		"status":      req.Status,
 	}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": "manager lifecycle updated"})
 }
@@ -716,16 +644,12 @@ func (s *Server) superBatchManagerLifecycle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
+	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
 		return
 	}
 	if req.ExtendDays < 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "延长天数必须为正数"})
-		return
-	}
-	if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" && !isManagerStatus(rawStatus) {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的状态值"})
 		return
 	}
 
@@ -755,26 +679,12 @@ func (s *Server) superBatchManagerLifecycle(c *gin.Context) {
 		}
 		for _, manager := range managers {
 			updates := map[string]any{"updated_at": now}
-			hasExpiryUpdate := false
 			if hasExpires {
 				updates["expires_at"] = parsedExpires
-				hasExpiryUpdate = true
 			}
 			if req.ExtendDays > 0 {
 				newExpire := extendExpiry(manager.ExpiresAt, req.ExtendDays, now)
 				updates["expires_at"] = newExpire
-				hasExpiryUpdate = true
-			}
-			if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
-				updates["status"] = rawStatus
-			} else if hasExpiryUpdate {
-				if expireTime, ok := updates["expires_at"].(time.Time); ok {
-					if expireTime.After(now) {
-						updates["status"] = models.ManagerStatusActive
-					} else {
-						updates["status"] = models.ManagerStatusExpired
-					}
-				}
 			}
 			if err := tx.Model(&models.Manager{}).Where("id = ?", manager.ID).Updates(updates).Error; err != nil {
 				return err
@@ -795,37 +705,9 @@ func (s *Server) superBatchManagerLifecycle(c *gin.Context) {
 		"manager_ids": req.ManagerIDs,
 		"extend_days": req.ExtendDays,
 		"expires_at":  req.ExpiresAt,
-		"status":      req.Status,
 		"updated":     updated,
 	}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"updated": updated})
-}
-
-func (s *Server) superBatchManagerStatus(c *gin.Context) {
-	var req batchManagerStatusRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
-		return
-	}
-	now := time.Now().UTC()
-	actorID := getUint(c, ctxActorIDKey)
-
-	updates := map[string]any{"status": req.Status, "updated_at": now}
-	if req.Status == models.ManagerStatusExpired {
-		updates["expires_at"] = now
-	}
-
-	result := s.db.Model(&models.Manager{}).Where("id IN ?", req.ManagerIDs).Updates(updates)
-	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "批量更新管理员状态失败"})
-		return
-	}
-	s.audit(models.ActorTypeSuper, actorID, "batch_manager_status", "manager", 0, datatypes.JSONMap{
-		"manager_ids": req.ManagerIDs,
-		"status":      req.Status,
-		"updated":     result.RowsAffected,
-	}, c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{"updated": result.RowsAffected})
 }
 
 func (s *Server) superBatchRevokeRenewalKeys(c *gin.Context) {
@@ -925,7 +807,6 @@ func (s *Server) managerRedeemRenewalKey(c *gin.Context) {
 		newExpire := extendExpiry(manager.ExpiresAt, key.DurationDays, now)
 		if err := tx.Model(&models.Manager{}).Where("id = ?", managerID).Updates(map[string]any{
 			"expires_at": newExpire,
-			"status":     models.ManagerStatusActive,
 			"updated_at": now,
 		}).Error; err != nil {
 			return err
@@ -967,7 +848,6 @@ func (s *Server) managerGetMe(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"id":         manager.ID,
 		"username":   manager.Username,
-		"status":     manager.Status,
 		"expires_at": manager.ExpiresAt,
 		"expired":    expired,
 	})
@@ -1265,18 +1145,19 @@ func (s *Server) managerListUsers(c *gin.Context) {
 		user.UserType = models.NormalizeUserType(user.UserType)
 		isExpired := user.ExpiresAt == nil || !user.ExpiresAt.After(now)
 		items = append(items, gin.H{
-			"id":         user.ID,
-			"account_no": user.AccountNo,
-			"manager_id": user.ManagerID,
-			"user_type":  user.UserType,
-			"status":     user.Status,
-			"server":     user.Server,
-			"username":   user.Username,
-			"is_expired": isExpired,
-			"expires_at": user.ExpiresAt,
-			"created_by": user.CreatedBy,
-			"created_at": user.CreatedAt,
-			"updated_at": user.UpdatedAt,
+			"id":             user.ID,
+			"account_no":     user.AccountNo,
+			"manager_id":     user.ManagerID,
+			"user_type":      user.UserType,
+			"status":         user.Status,
+			"archive_status": user.ArchiveStatus,
+			"server":         user.Server,
+			"username":       user.Username,
+			"is_expired":     isExpired,
+			"expires_at":     user.ExpiresAt,
+			"created_by":     user.CreatedBy,
+			"created_at":     user.CreatedAt,
+			"updated_at":     user.UpdatedAt,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1301,10 +1182,9 @@ func (s *Server) managerOverview(c *gin.Context) {
 	now := time.Now().UTC()
 
 	userStats := gin.H{
-		"total":    int64(0),
-		"active":   int64(0),
-		"expired":  int64(0),
-		"disabled": int64(0),
+		"total":   int64(0),
+		"active":  int64(0),
+		"expired": int64(0),
 	}
 	jobStats := gin.H{
 		"pending": int64(0),
@@ -1314,7 +1194,7 @@ func (s *Server) managerOverview(c *gin.Context) {
 		"failed":  int64(0),
 	}
 
-	userStatusTargets := []string{models.UserStatusActive, models.UserStatusExpired, models.UserStatusDisabled}
+	userStatusTargets := []string{models.UserStatusActive, models.UserStatusExpired}
 	var totalUsers int64
 	for _, status := range userStatusTargets {
 		var count int64
@@ -1397,7 +1277,7 @@ func (s *Server) managerPatchUserLifecycle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" {
+	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.Status) == "" && strings.TrimSpace(req.ArchiveStatus) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
 		return
 	}
@@ -1447,6 +1327,14 @@ func (s *Server) managerPatchUserLifecycle(c *gin.Context) {
 				}
 			}
 		}
+	}
+
+	if archiveStatus := strings.TrimSpace(req.ArchiveStatus); archiveStatus != "" {
+		if archiveStatus != "normal" && archiveStatus != "invalid" {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的存档状态值，仅支持 normal 或 invalid"})
+			return
+		}
+		updates["archive_status"] = archiveStatus
 	}
 
 	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
@@ -1988,18 +1876,19 @@ func (s *Server) userGetMeProfile(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"user_id":       user.ID,
-		"account_no":    user.AccountNo,
-		"manager_id":    user.ManagerID,
-		"user_type":     models.NormalizeUserType(user.UserType),
-		"status":        user.Status,
-		"server":        user.Server,
-		"username":      user.Username,
-		"expires_at":    user.ExpiresAt,
-		"assets":        deepMergeMap(taskmeta.BuildDefaultUserAssets(), map[string]any(user.Assets)),
-		"token_exp":     token.ExpiresAt,
-		"token_created": token.CreatedAt,
-		"last_used_at":  token.LastUsedAt,
+		"user_id":        user.ID,
+		"account_no":     user.AccountNo,
+		"manager_id":     user.ManagerID,
+		"user_type":      models.NormalizeUserType(user.UserType),
+		"status":         user.Status,
+		"archive_status": user.ArchiveStatus,
+		"server":         user.Server,
+		"username":       user.Username,
+		"expires_at":     user.ExpiresAt,
+		"assets":         deepMergeMap(taskmeta.BuildDefaultUserAssets(), map[string]any(user.Assets)),
+		"token_exp":      token.ExpiresAt,
+		"token_created":  token.CreatedAt,
+		"last_used_at":   token.LastUsedAt,
 	})
 }
 
@@ -2018,6 +1907,46 @@ func (s *Server) userLogout(c *gin.Context) {
 
 	s.audit(models.ActorTypeUser, userID, "user_logout", "user_token", tokenID, datatypes.JSONMap{}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": "logout success", "revoked": result.RowsAffected})
+}
+
+func (s *Server) userPutMeProfile(c *gin.Context) {
+	var req struct {
+		Server   *string `json:"server"`
+		Username *string `json:"username"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	userID := getUint(c, ctxUserIDKey)
+	updates := map[string]any{}
+	if req.Server != nil {
+		s := *req.Server
+		if len(s) > 128 {
+			s = s[:128]
+		}
+		updates["server"] = s
+	}
+	if req.Username != nil {
+		u := *req.Username
+		if len(u) > 128 {
+			u = u[:128]
+		}
+		updates["username"] = u
+	}
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "没有可更新的字段"})
+		return
+	}
+
+	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新用户信息失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, userID, "user_update_profile", "user", userID, datatypes.JSONMap(updates), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
 }
 
 func (s *Server) userGetMeAssets(c *gin.Context) {
@@ -2140,7 +2069,7 @@ func (s *Server) agentLogin(c *gin.Context) {
 		return
 	}
 	now := time.Now().UTC()
-	if manager.Status != models.ManagerStatusActive || manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) {
+	if manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) {
 		c.JSON(http.StatusForbidden, gin.H{"detail": "管理员账号未激活或已过期"})
 		return
 	}
@@ -2722,15 +2651,6 @@ func (s *Server) queryUserLogsPaginated(managerID, userID uint, pg paginationPar
 func isCodeStatus(status string) bool {
 	switch strings.TrimSpace(status) {
 	case models.CodeStatusUnused, models.CodeStatusUsed, models.CodeStatusRevoked:
-		return true
-	default:
-		return false
-	}
-}
-
-func isManagerStatus(status string) bool {
-	switch strings.TrimSpace(status) {
-	case models.ManagerStatusActive, models.ManagerStatusExpired, models.ManagerStatusDisabled:
 		return true
 	default:
 		return false

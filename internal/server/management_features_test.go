@@ -127,7 +127,6 @@ func TestSuperPatchManagerLifecycleAndRevokeRenewalKey(t *testing.T) {
 
 	expiredAt := time.Now().UTC().Add(-4 * time.Hour)
 	if err := db.Model(&models.Manager{}).Where("id = ?", manager.ID).Updates(map[string]any{
-		"status":     models.ManagerStatusExpired,
 		"expires_at": expiredAt,
 		"updated_at": time.Now().UTC(),
 	}).Error; err != nil {
@@ -167,9 +166,6 @@ func TestSuperPatchManagerLifecycleAndRevokeRenewalKey(t *testing.T) {
 	var refreshed models.Manager
 	if err := db.Where("id = ?", manager.ID).First(&refreshed).Error; err != nil {
 		t.Fatalf("query manager failed: %v", err)
-	}
-	if refreshed.Status != models.ManagerStatusActive {
-		t.Fatalf("manager should be active after extend, got %s", refreshed.Status)
 	}
 	if refreshed.ExpiresAt == nil || !refreshed.ExpiresAt.After(time.Now().UTC()) {
 		t.Fatalf("manager expiry should be in the future after extend")

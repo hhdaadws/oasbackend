@@ -133,12 +133,7 @@ func (s *Server) requireManagerActive() gin.HandlerFunc {
 		}
 
 		now := time.Now().UTC()
-		if manager.Status == models.ManagerStatusDisabled {
-			c.JSON(http.StatusForbidden, gin.H{"detail": "管理员账号已禁用"})
-			c.Abort()
-			return
-		}
-		if manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) || manager.Status != models.ManagerStatusActive {
+		if manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) {
 			c.JSON(http.StatusForbidden, gin.H{"detail": "管理员账号已过期"})
 			c.Abort()
 			return

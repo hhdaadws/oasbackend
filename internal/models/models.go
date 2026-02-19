@@ -9,10 +9,6 @@ import (
 )
 
 const (
-	ManagerStatusActive   = "active"
-	ManagerStatusExpired  = "expired"
-	ManagerStatusDisabled = "disabled"
-
 	UserStatusActive   = "active"
 	UserStatusExpired  = "expired"
 	UserStatusDisabled = "disabled"
@@ -50,7 +46,6 @@ type Manager struct {
 	ID           uint       `gorm:"primaryKey"`
 	Username     string     `gorm:"size:64;not null;uniqueIndex"`
 	PasswordHash string     `gorm:"size:255;not null"`
-	Status       string     `gorm:"size:20;not null;default:expired;index"`
 	ExpiresAt    *time.Time `gorm:"index"`
 	CreatedAt    time.Time  `gorm:"not null"`
 	UpdatedAt    time.Time  `gorm:"not null"`
@@ -68,18 +63,19 @@ type ManagerRenewalKey struct {
 }
 
 type User struct {
-	ID        uint              `gorm:"primaryKey"`
-	AccountNo string            `gorm:"size:64;not null;uniqueIndex"`
-	ManagerID uint              `gorm:"not null;index"`
-	UserType  string            `gorm:"size:20;not null;default:daily;index"`
-	Status    string            `gorm:"size:20;not null;default:expired;index"`
-	Server    string            `gorm:"size:128;not null;default:''"`
-	Username  string            `gorm:"size:128;not null;default:''"`
-	ExpiresAt *time.Time        `gorm:"index"`
-	Assets    datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
-	CreatedBy string            `gorm:"size:30;not null"`
-	CreatedAt time.Time         `gorm:"not null"`
-	UpdatedAt time.Time         `gorm:"not null"`
+	ID            uint              `gorm:"primaryKey"`
+	AccountNo     string            `gorm:"size:64;not null;uniqueIndex"`
+	ManagerID     uint              `gorm:"not null;index"`
+	UserType      string            `gorm:"size:20;not null;default:daily;index"`
+	Status        string            `gorm:"size:20;not null;default:expired;index"`
+	ArchiveStatus string            `gorm:"size:20;not null;default:normal"`
+	Server        string            `gorm:"size:128;not null;default:''"`
+	Username      string            `gorm:"size:128;not null;default:''"`
+	ExpiresAt     *time.Time        `gorm:"index"`
+	Assets        datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	CreatedBy     string            `gorm:"size:30;not null"`
+	CreatedAt     time.Time         `gorm:"not null"`
+	UpdatedAt     time.Time         `gorm:"not null"`
 }
 
 type UserToken struct {
