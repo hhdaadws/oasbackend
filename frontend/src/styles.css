@@ -541,12 +541,17 @@ body {
 
 /* Dialog responsive width */
 .el-dialog {
-  max-width: calc(100vw - 32px);
+  max-width: calc(100vw - 16px);
 }
 
 .el-dialog__body {
   overflow-y: auto;
-  max-height: calc(80vh - 110px);
+  max-height: calc(88vh - 110px);
+}
+
+/* dialog 内的表格不受全局 max-height 限制，由 dialog body 统一控制滚动 */
+.el-dialog .data-table-wrapper .el-table {
+  max-height: none;
 }
 
 /* Collapse section spacing (JSON editor etc.) */

@@ -146,7 +146,7 @@
     </el-dialog>
 
     <!-- User Detail Dialog -->
-    <el-dialog v-model="showUserDetailDialog" title="下属账号详情" width="1000px" :close-on-click-modal="false">
+    <el-dialog v-model="showUserDetailDialog" title="下属账号详情" width="92%" :close-on-click-modal="false">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--line-soft)">
         <strong style="font-size:15px">{{ props.selectedUserAccountNo || '-' }}</strong>
         <el-tag :type="statusTagType(props.selectedUserStatus)">{{ statusLabel(props.selectedUserStatus) }}</el-tag>
