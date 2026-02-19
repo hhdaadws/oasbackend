@@ -42,6 +42,34 @@
           </div>
 
           <el-form :model="userForm" label-width="100px" class="compact-form">
+            <div v-if="savedAccounts.length" class="saved-accounts-section">
+              <div class="saved-accounts-title">已保存的账号</div>
+              <div
+                v-for="account in savedAccounts"
+                :key="account.account_no"
+                class="saved-account-item"
+                @click="loginWithSaved(account)"
+              >
+                <div class="saved-account-info">
+                  <div class="saved-account-name">
+                    {{ account.login_id || account.account_no }}
+                  </div>
+                  <div class="saved-account-sub" v-if="account.login_id">
+                    {{ account.account_no }}
+                  </div>
+                </div>
+                <el-tag :type="statusTagType(account.status)" size="small" class="tag-gap">
+                  {{ statusLabel(account.status) }}
+                </el-tag>
+                <el-tag :type="account.archive_status === 'normal' ? 'success' : 'danger'" size="small" class="tag-gap">
+                  {{ account.archive_status === 'normal' ? '正常' : '失效' }}
+                </el-tag>
+                <el-button link type="danger" size="small" @click.stop="deleteSavedAccount(account.account_no)">
+                  删除
+                </el-button>
+              </div>
+              <el-divider />
+            </div>
             <el-form-item label="激活码注册">
               <el-input v-model="userForm.registerCode" class="auth-input" placeholder="激活码示例：uac_xxx" clearable />
             </el-form-item>
@@ -88,6 +116,42 @@
         </div>
       </section>
     </section>
+
+    <el-dialog
+      v-model="showAccountSaveDialog"
+      title="注册成功 — 请保存您的账号"
+      class="dialog-sm"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+      append-to-body
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="请务必保存以下账号信息，这是您登录的唯一凭证！丢失后无法找回。"
+        class="mb-20"
+      />
+      <div class="account-display-center">
+        <span class="account-no-highlight">
+          {{ registeredAccountNo }}
+        </span>
+      </div>
+      <div class="dialog-actions-center">
+        <el-button type="primary" @click="copyAccountNo">复制账号</el-button>
+        <el-button type="success" @click="downloadAccountInfo">下载账号信息</el-button>
+      </div>
+      <template #footer>
+        <el-button
+          type="warning"
+          :disabled="!accountSaved"
+          @click="confirmAccountSaved"
+        >
+          我已保存，进入系统
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -95,7 +159,8 @@
 import { reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { managerApi, parseApiError, userApi } from "../lib/http";
-import { setManagerToken, setUserSession } from "../lib/session";
+import { setManagerToken, setUserSession, getSavedAccounts, upsertSavedAccount, removeSavedAccount } from "../lib/session";
+import { copyToClipboard, statusTagType, statusLabel } from "../lib/helpers";
 
 const props = defineProps({
   session: {
@@ -116,6 +181,11 @@ const userForm = reactive({
   registerCode: "",
   accountNo: props.session.userAccountNo || "",
 });
+
+const showAccountSaveDialog = ref(false);
+const registeredAccountNo = ref("");
+const accountSaved = ref(false);
+const savedAccounts = ref(getSavedAccounts());
 
 const loading = reactive({
   managerRegister: false,
@@ -175,13 +245,52 @@ async function registerUserByCode() {
     setUserSession(response.token || "", response.account_no || "");
     userForm.accountNo = response.account_no || "";
     emit("session-updated");
-    ElMessage.success("普通用户注册并登录成功");
-    emit("navigate", "/user");
+    try {
+      const profile = await userApi.getMeProfile(response.token);
+      upsertSavedAccount({
+        account_no: response.account_no,
+        login_id: profile.login_id,
+        username: profile.username,
+        status: profile.status,
+        user_type: response.user_type,
+        archive_status: profile.archive_status,
+      });
+    } catch {
+      upsertSavedAccount({ account_no: response.account_no, user_type: response.user_type });
+    }
+    savedAccounts.value = getSavedAccounts();
+    registeredAccountNo.value = response.account_no || "";
+    accountSaved.value = false;
+    showAccountSaveDialog.value = true;
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
     loading.userRegister = false;
   }
+}
+
+async function copyAccountNo() {
+  await copyToClipboard(registeredAccountNo.value);
+  ElMessage.success("账号已复制到剪贴板");
+  accountSaved.value = true;
+}
+
+function downloadAccountInfo() {
+  const content = `OAS 云端账号信息\n\n账号: ${registeredAccountNo.value}\n\n请妥善保管此账号，这是您登录的唯一凭证，丢失后无法找回！`;
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `OAS账号_${registeredAccountNo.value}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+  accountSaved.value = true;
+}
+
+function confirmAccountSaved() {
+  showAccountSaveDialog.value = false;
+  ElMessage.success("普通用户注册并登录成功");
+  emit("navigate", "/user");
 }
 
 async function loginUser() {
@@ -195,6 +304,20 @@ async function loginUser() {
     const response = await userApi.login({ account_no: accountNo });
     setUserSession(response.token || "", response.account_no || accountNo);
     emit("session-updated");
+    try {
+      const profile = await userApi.getMeProfile(response.token);
+      upsertSavedAccount({
+        account_no: response.account_no || accountNo,
+        login_id: profile.login_id,
+        username: profile.username,
+        status: profile.status,
+        user_type: profile.user_type,
+        archive_status: profile.archive_status,
+      });
+    } catch {
+      upsertSavedAccount({ account_no: response.account_no || accountNo });
+    }
+    savedAccounts.value = getSavedAccounts();
     ElMessage.success("普通用户登录成功");
     emit("navigate", "/user");
   } catch (error) {
@@ -202,5 +325,15 @@ async function loginUser() {
   } finally {
     loading.userLogin = false;
   }
+}
+
+function loginWithSaved(account) {
+  userForm.accountNo = account.account_no;
+  loginUser();
+}
+
+function deleteSavedAccount(accountNo) {
+  removeSavedAccount(accountNo);
+  savedAccounts.value = getSavedAccounts();
 }
 </script>

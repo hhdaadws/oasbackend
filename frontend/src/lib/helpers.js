@@ -85,9 +85,101 @@ export function keyStatusLabel(status) {
   return map[status] || status || "-";
 }
 
+export function jobStatusTagType(status) {
+  const map = { pending: "info", leased: "warning", running: "", success: "success", failed: "danger", timeout_requeued: "warning" };
+  return map[status] || "info";
+}
+
+export function jobStatusLabel(status) {
+  const map = { pending: "待执行", leased: "已分配", running: "运行中", success: "成功", failed: "失败", timeout_requeued: "重新排队" };
+  return map[status] || status || "-";
+}
+
+export function eventTypeLabel(eventType) {
+  const map = {
+    generated: "任务生成",
+    leased: "已领取",
+    start: "开始执行",
+    heartbeat: "等待中",
+    success: "执行成功",
+    fail: "执行失败",
+    timeout_requeued: "超时重排",
+  };
+  return map[eventType] || eventType || "-";
+}
+
+export function eventTypeTagType(eventType) {
+  const map = {
+    success: "success",
+    fail: "danger",
+    generated: "primary",
+    start: "",
+    timeout_requeued: "warning",
+    heartbeat: "info",
+    leased: "info",
+  };
+  return map[eventType] || "info";
+}
+
+export function errorCodeLabel(code) {
+  if (!code) return "";
+  const map = {
+    LOCAL_ACCOUNT_NOT_MAPPED: "本地账号未映射",
+    LOCAL_BATCH_FAILED: "本地执行失败",
+    LOCAL_ACCOUNT_MISSING: "缺少本地账号",
+    TASK_TYPE_INVALID: "任务类型无效",
+  };
+  return map[code] || code;
+}
+
 export function isHHmmPattern(value) {
   return /^\d{2}:\d{2}$/.test(value);
 }
+
+export const SPECIAL_TASK_NAMES = new Set([
+  '探索突破', '结界卡合成', '寮商店', '每周商店', '御魂', '斗技',
+]);
+
+export function auditActionLabel(action) {
+  const map = {
+    create_manager_renewal_key: "创建续费密钥",
+    patch_manager_renewal_key_status: "撤销续费密钥",
+    batch_revoke_renewal_keys: "批量撤销密钥",
+    delete_manager_renewal_key: "删除续费密钥",
+    batch_delete_renewal_keys: "批量删除密钥",
+    patch_manager_lifecycle: "修改管理员有效期",
+    reset_manager_password: "重置管理员密码",
+    batch_manager_lifecycle: "批量修改管理员有效期",
+    redeem_manager_renewal_key: "使用续费密钥",
+  };
+  return map[action] || action || "-";
+}
+
+export function actorTypeLabel(actorType) {
+  const map = { super: "超级管理员", manager: "管理员" };
+  return map[actorType] || actorType || "-";
+}
+
+export function auditActionTagType(action) {
+  if (!action) return "info";
+  if (action.startsWith("create_") || action === "redeem_manager_renewal_key") return "success";
+  if (action.startsWith("delete_") || action.startsWith("batch_delete_")) return "danger";
+  if (action.includes("revoke")) return "warning";
+  if (action.startsWith("reset_")) return "warning";
+  return "info";
+}
+
+export const AUDIT_ACTION_OPTIONS = [
+  { value: "create_manager_renewal_key", label: "创建续费密钥" },
+  { value: "delete_manager_renewal_key", label: "删除续费密钥" },
+  { value: "batch_delete_renewal_keys", label: "批量删除密钥" },
+  { value: "patch_manager_renewal_key_status", label: "撤销续费密钥" },
+  { value: "batch_revoke_renewal_keys", label: "批量撤销密钥" },
+  { value: "redeem_manager_renewal_key", label: "使用续费密钥" },
+  { value: "patch_manager_lifecycle", label: "修改管理员有效期" },
+  { value: "batch_manager_lifecycle", label: "批量修改管理员有效期" },
+  { value: "reset_manager_password", label: "重置管理员密码" },
+];
 
 export async function copyToClipboard(text) {
   if (navigator.clipboard && window.isSecureContext) {

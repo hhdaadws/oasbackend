@@ -15,6 +15,10 @@
           <OverviewTab :token="token" />
         </el-tab-pane>
 
+        <el-tab-pane label="任务池" name="taskpool">
+          <TaskPoolTab :token="token" />
+        </el-tab-pane>
+
         <el-tab-pane label="激活码管理" name="codes">
           <ActivationCodesTab :token="token" />
         </el-tab-pane>
@@ -49,6 +53,7 @@
 import { ref, watch } from "vue";
 import { useTaskTemplates } from "../../composables/useTaskTemplates";
 import OverviewTab from "./OverviewTab.vue";
+import TaskPoolTab from "./TaskPoolTab.vue";
 import ActivationCodesTab from "./ActivationCodesTab.vue";
 import UsersTab from "./UsersTab.vue";
 import UserLogsTab from "./UserLogsTab.vue";

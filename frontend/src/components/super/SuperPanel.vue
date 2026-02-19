@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import RenewalKeysTab from "./RenewalKeysTab.vue";
 import ManagersTab from "./ManagersTab.vue";
+import AuditLogsTab from "./AuditLogsTab.vue";
 
 const props = defineProps({
   token: { type: String, default: "" },
@@ -29,6 +30,9 @@ const activeTab = ref("keys");
         </el-tab-pane>
         <el-tab-pane label="管理员管理" name="managers">
           <ManagersTab :token="token" />
+        </el-tab-pane>
+        <el-tab-pane label="操作日志" name="audit-logs">
+          <AuditLogsTab :token="token" />
         </el-tab-pane>
       </el-tabs>
     </template>

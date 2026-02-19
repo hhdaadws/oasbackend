@@ -1,6 +1,8 @@
 package models
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +48,7 @@ type Manager struct {
 	ID           uint       `gorm:"primaryKey"`
 	Username     string     `gorm:"size:64;not null;uniqueIndex"`
 	PasswordHash string     `gorm:"size:255;not null"`
+	Alias        string     `gorm:"size:64;not null;default:''"`
 	ExpiresAt    *time.Time `gorm:"index"`
 	CreatedAt    time.Time  `gorm:"not null"`
 	UpdatedAt    time.Time  `gorm:"not null"`
@@ -66,14 +69,20 @@ type User struct {
 	ID            uint              `gorm:"primaryKey"`
 	AccountNo     string            `gorm:"size:64;not null;uniqueIndex"`
 	ManagerID     uint              `gorm:"not null;index"`
+	LoginID       string            `gorm:"size:64;not null;default:''"`
 	UserType      string            `gorm:"size:20;not null;default:daily;index"`
 	Status        string            `gorm:"size:20;not null;default:expired;index"`
 	ArchiveStatus string            `gorm:"size:20;not null;default:normal"`
 	Server        string            `gorm:"size:128;not null;default:''"`
 	Username      string            `gorm:"size:128;not null;default:''"`
 	ExpiresAt     *time.Time        `gorm:"index"`
-	Assets        datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
-	CreatedBy     string            `gorm:"size:30;not null"`
+	Assets          datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	RestConfig      datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	LineupConfig    datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	ShikigamiConfig datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	ExploreProgress datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	NotifyConfig    datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	CreatedBy       string            `gorm:"size:30;not null"`
 	CreatedAt     time.Time         `gorm:"not null"`
 	UpdatedAt     time.Time         `gorm:"not null"`
 }
@@ -159,7 +168,7 @@ type AuditLog struct {
 }
 
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&SuperAdmin{},
 		&Manager{},
 		&ManagerRenewalKey{},
@@ -171,7 +180,46 @@ func AutoMigrate(db *gorm.DB) error {
 		&TaskJobEvent{},
 		&AgentNode{},
 		&AuditLog{},
-	)
+	); err != nil {
+		return err
+	}
+	return backfillLoginIDs(db)
+}
+
+// backfillLoginIDs assigns sequential login_id to existing users that have an
+// empty value, then ensures the composite unique index (manager_id, login_id)
+// exists.
+func backfillLoginIDs(db *gorm.DB) error {
+	var count int64
+	if err := db.Model(&User{}).Where("login_id = ''").Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		var managerIDs []uint
+		if err := db.Model(&User{}).Where("login_id = ''").Distinct("manager_id").Pluck("manager_id", &managerIDs).Error; err != nil {
+			return err
+		}
+		for _, mid := range managerIDs {
+			var maxVal int64
+			row := db.Model(&User{}).
+				Where("manager_id = ? AND login_id != ''", mid).
+				Select("COALESCE(MAX(CAST(login_id AS INTEGER)), 0)").Row()
+			if row != nil {
+				_ = row.Scan(&maxVal)
+			}
+			var users []User
+			if err := db.Where("manager_id = ? AND login_id = ''", mid).Order("id asc").Find(&users).Error; err != nil {
+				return err
+			}
+			for i, u := range users {
+				newID := strconv.FormatInt(maxVal+int64(i)+1, 10)
+				if err := db.Model(&User{}).Where("id = ?", u.ID).Update("login_id", newID).Error; err != nil {
+					return fmt.Errorf("backfill login_id for user %d: %w", u.ID, err)
+				}
+			}
+		}
+	}
+	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_manager_login_id ON users(manager_id, login_id)").Error
 }
 
 func NormalizeUserType(value string) string {

@@ -15,7 +15,7 @@ const loading = reactive({ profile: false, saveProfile: false });
 
 const profile = reactive({
   account_no: "", user_type: "daily", status: "", archive_status: "normal",
-  expires_at: "", server: "", username: "", manager_id: "",
+  expires_at: "", server: "", username: "", manager_id: "", manager_alias: "",
 });
 
 const editForm = reactive({ server: "", username: "" });
@@ -61,6 +61,7 @@ async function loadMeProfile() {
     profile.server = response.server || "";
     profile.username = response.username || "";
     profile.manager_id = response.manager_id || "";
+    profile.manager_alias = response.manager_alias || "";
     editForm.server = profile.server;
     editForm.username = profile.username;
   } catch (error) {
@@ -117,7 +118,7 @@ async function saveMeProfile() {
         <el-button type="primary" :loading="loading.saveProfile" @click="saveMeProfile">保存</el-button>
       </div>
     </div>
-    <el-form label-width="100px" style="margin-top:12px">
+    <el-form label-width="100px" class="mt-12">
       <el-form-item label="服务器">
         <el-input v-model="editForm.server" placeholder="请输入服务器" clearable />
       </el-form-item>
@@ -125,7 +126,7 @@ async function saveMeProfile() {
         <el-input v-model="editForm.username" placeholder="请输入用户名" clearable />
       </el-form-item>
     </el-form>
-    <div class="stats-grid" style="margin-top:12px">
+    <div class="stats-grid mt-12">
       <div class="stat-item">
         <span class="stat-label">存档状态</span>
         <el-tag :type="archiveStatusTagType(profile.archive_status)">{{ archiveStatusLabel(profile.archive_status) }}</el-tag>
@@ -143,8 +144,8 @@ async function saveMeProfile() {
         <strong class="stat-value stat-time">{{ formatTime(profile.expires_at) }}</strong>
       </div>
       <div class="stat-item">
-        <span class="stat-label">上级管理员ID</span>
-        <strong class="stat-value">{{ profile.manager_id || "-" }}</strong>
+        <span class="stat-label">上级管理员</span>
+        <strong class="stat-value">{{ profile.manager_alias || profile.manager_id || "-" }}</strong>
       </div>
     </div>
   </section>

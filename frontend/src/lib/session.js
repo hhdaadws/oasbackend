@@ -45,3 +45,37 @@ export function clearUserSession({ keepAccountNo = true } = {}) {
     localStorage.removeItem(STORAGE_KEYS.userAccountNo);
   }
 }
+
+const SAVED_ACCOUNTS_KEY = "oas_cloud_saved_accounts";
+
+export function getSavedAccounts() {
+  try {
+    return JSON.parse(localStorage.getItem(SAVED_ACCOUNTS_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+export function upsertSavedAccount({ account_no, login_id, username, status, user_type, archive_status }) {
+  const list = getSavedAccounts();
+  const idx = list.findIndex((a) => a.account_no === account_no);
+  const entry = {
+    account_no,
+    login_id: login_id || "",
+    username: username || "",
+    status: status || "active",
+    user_type: user_type || "",
+    archive_status: archive_status || "normal",
+  };
+  if (idx >= 0) {
+    list[idx] = { ...list[idx], ...entry };
+  } else {
+    list.unshift(entry);
+  }
+  localStorage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(list));
+}
+
+export function removeSavedAccount(accountNo) {
+  const list = getSavedAccounts().filter((a) => a.account_no !== accountNo);
+  localStorage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(list));
+}

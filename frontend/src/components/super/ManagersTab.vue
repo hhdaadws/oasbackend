@@ -25,11 +25,21 @@ const showEditDialog = ref(false);
 const editingManager = ref(null);
 const editForm = reactive({ expires_at: "", extend_days: 0 });
 
+const showPasswordDialog = ref(false);
+const passwordManager = ref(null);
+const passwordForm = reactive({ new_password: "" });
+
 function openEditDialog(row) {
   editingManager.value = row;
   editForm.expires_at = row.expires_at || "";
   editForm.extend_days = 0;
   showEditDialog.value = true;
+}
+
+function openPasswordDialog(row) {
+  passwordManager.value = row;
+  passwordForm.new_password = "";
+  showPasswordDialog.value = true;
 }
 
 async function copyUsername(username) {
@@ -134,6 +144,30 @@ async function batchExtendManagers() {
   }
 }
 
+async function resetManagerPassword() {
+  if (!passwordManager.value?.id) { ElMessage.warning("无效管理员记录"); return; }
+  if (!passwordForm.new_password || passwordForm.new_password.length < 6) {
+    ElMessage.warning("密码长度至少6位");
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定要重置管理员 "${passwordManager.value.username}" 的密码吗？`,
+      "确认重置密码",
+      { confirmButtonText: "确定重置", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch { return; }
+  try {
+    await superApi.resetManagerPassword(props.token, passwordManager.value.id, {
+      new_password: passwordForm.new_password,
+    });
+    ElMessage.success(`管理员 ${passwordManager.value.username} 密码已重置`);
+    showPasswordDialog.value = false;
+  } catch (error) {
+    ElMessage.error(parseApiError(error));
+  }
+}
+
 </script>
 
 <template>
@@ -180,7 +214,7 @@ async function batchExtendManagers() {
       <span class="muted">共 {{ pagination.total }} 条</span>
     </div>
 
-    <TableSkeleton v-if="loading.list && managers.length === 0" :rows="5" :columns="7" />
+    <TableSkeleton v-if="loading.list && managers.length === 0" :rows="5" :columns="10" />
     <div v-else class="data-table-wrapper">
       <el-table
         ref="tableRef"
@@ -208,16 +242,32 @@ async function batchExtendManagers() {
         <el-table-column label="到期时间" min-width="190" sortable>
           <template #default="scope">{{ formatTime(scope.row.expires_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="100">
+        <el-table-column prop="total_users" label="总用户数" width="110" sortable>
+          <template #default="scope">
+            <span>{{ scope.row.total_users ?? 0 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="active_users" label="活跃用户" width="110" sortable>
+          <template #default="scope">
+            <el-tag type="success" size="small">{{ scope.row.active_users ?? 0 }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="expired_users" label="过期用户" width="110" sortable>
+          <template #default="scope">
+            <el-tag type="warning" size="small">{{ scope.row.expired_users ?? 0 }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180">
           <template #default="scope">
             <el-button type="primary" plain size="small" @click="openEditDialog(scope.row)">编辑</el-button>
+            <el-button type="warning" plain size="small" @click="openPasswordDialog(scope.row)">重置密码</el-button>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
     <BatchActionBar :selected-count="selectedCount" @clear="() => { clearSelection(); tableRef?.clearSelection(); }">
-      <el-input-number v-model="batchForm.extend_days" :min="1" :max="3650" size="small" style="width: 100px" />
+      <el-input-number v-model="batchForm.extend_days" :min="1" :max="3650" size="small" class="w-100" />
       <el-button type="primary" :loading="loading.batch" @click="batchExtendManagers">批量延长</el-button>
     </BatchActionBar>
 
@@ -235,20 +285,34 @@ async function batchExtendManagers() {
     </div>
   </section>
 
-  <el-dialog v-model="showEditDialog" title="编辑管理员生命周期" width="460px">
-    <p class="muted" style="margin-bottom:12px">管理员：{{ editingManager?.username }}</p>
+  <el-dialog v-model="showEditDialog" title="编辑管理员生命周期" class="dialog-sm" append-to-body>
+    <p class="muted mb-12">管理员：{{ editingManager?.username }}</p>
     <el-form :model="editForm" label-width="100px">
       <el-form-item label="到期时间">
         <el-date-picker v-model="editForm.expires_at" type="datetime"
-          value-format="YYYY-MM-DD HH:mm" placeholder="选择到期日期时间" style="width:100%" />
+          value-format="YYYY-MM-DD HH:mm" placeholder="选择到期日期时间" class="w-full" />
       </el-form-item>
       <el-form-item label="延长天数">
-        <el-input-number v-model="editForm.extend_days" :min="0" :max="3650" style="width:100%" />
+        <el-input-number v-model="editForm.extend_days" :min="0" :max="3650" class="w-full" />
       </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="showEditDialog = false">取消</el-button>
       <el-button type="primary" :loading="editingManager?._updating" @click="saveManagerLifecycle">保存</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="showPasswordDialog" title="重置管理员密码" class="dialog-sm" append-to-body>
+    <p class="muted mb-12">管理员：{{ passwordManager?.username }}</p>
+    <el-form :model="passwordForm" label-width="100px">
+      <el-form-item label="新密码">
+        <el-input v-model="passwordForm.new_password" type="password"
+          show-password placeholder="请输入新密码（至少6位）" maxlength="128" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="showPasswordDialog = false">取消</el-button>
+      <el-button type="warning" @click="resetManagerPassword">确认重置</el-button>
     </template>
   </el-dialog>
 </template>

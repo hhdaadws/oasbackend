@@ -94,7 +94,7 @@ async function batchDeleteKeys() {
     );
   } catch { return; }
   try {
-    const res = await superApi.batchDeleteRenewalKeys(props.token, { key_ids: selectedIds.value });
+    const res = await superApi.batchDeleteRenewalKeys(props.token, { ids: selectedIds.value });
     ElMessage.success(`已删除 ${res.deleted} 个秘钥`);
     clearSelection();
     if (tableRef.value) tableRef.value.clearSelection();
@@ -127,7 +127,7 @@ async function loadRenewalKeys() {
 }
 
 function canSelectRow(row) {
-  return row.status === "unused";
+  return row.status === "unused" || row.status === "used";
 }
 
 async function copyKeyCode(code) {
@@ -232,7 +232,7 @@ async function copyKeyCode(code) {
         <el-table-column label="操作" width="120">
           <template #default="scope">
             <el-button
-              v-if="scope.row.status === 'unused'"
+              v-if="scope.row.status === 'unused' || scope.row.status === 'used'"
               type="danger"
               plain
               size="small"
@@ -265,18 +265,17 @@ async function copyKeyCode(code) {
     </div>
   </section>
 
-  <el-dialog v-model="showCreateDialog" title="生成续费秘钥" width="420px"
+  <el-dialog v-model="showCreateDialog" title="生成续费秘钥" class="dialog-sm" append-to-body
     @close="latestRenewal.code = ''">
     <el-form :model="renewalForm" label-width="100px">
       <el-form-item label="续期天数">
-        <el-input-number v-model="renewalForm.duration_days" :min="1" :max="3650" style="width:100%" />
+        <el-input-number v-model="renewalForm.duration_days" :min="1" :max="3650" class="w-full" />
       </el-form-item>
     </el-form>
-    <div v-if="latestRenewal.code" style="margin-top:12px;display:flex;align-items:flex-start;gap:8px;">
+    <div v-if="latestRenewal.code" class="latest-key-row">
       <el-alert type="success" :closable="false"
         :title="`秘钥：${latestRenewal.code}`"
         :description="`续期天数：${latestRenewal.duration_days} 天`"
-        style="flex:1"
       />
       <el-button size="small" type="success" plain @click="copyKeyCode(latestRenewal.code)">复制</el-button>
     </div>

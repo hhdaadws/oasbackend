@@ -115,6 +115,20 @@ export const superApi = {
       data,
       headers: withBearer(token),
     }),
+  resetManagerPassword: (token, managerId, payload) =>
+    request({
+      method: "PATCH",
+      url: `/super/managers/${managerId}/password`,
+      data: payload,
+      headers: withBearer(token),
+    }),
+  listAuditLogs: (token, params = {}) =>
+    request({
+      method: "GET",
+      url: "/super/audit-logs",
+      params,
+      headers: withBearer(token),
+    }),
 };
 
 export const managerApi = {
@@ -135,10 +149,24 @@ export const managerApi = {
       data: payload,
       headers: withBearer(token),
     }),
+  putMeAlias: (token, payload) =>
+    request({
+      method: "PUT",
+      url: "/manager/me/alias",
+      data: payload,
+      headers: withBearer(token),
+    }),
   overview: (token) =>
     request({
       method: "GET",
       url: "/manager/overview",
+      headers: withBearer(token),
+    }),
+  taskPool: (token, params = {}) =>
+    request({
+      method: "GET",
+      url: "/manager/task-pool",
+      params,
       headers: withBearer(token),
     }),
   createActivationCode: (token, payload) =>
@@ -233,6 +261,19 @@ export const managerApi = {
     request({
       method: "POST",
       url: "/manager/users/batch-assets",
+      data: payload,
+      headers: withBearer(token),
+    }),
+  deleteUser: (token, userId) =>
+    request({
+      method: "DELETE",
+      url: `/manager/users/${userId}`,
+      headers: withBearer(token),
+    }),
+  batchDeleteUsers: (token, payload) =>
+    request({
+      method: "POST",
+      url: "/manager/users/batch-delete",
       data: payload,
       headers: withBearer(token),
     }),

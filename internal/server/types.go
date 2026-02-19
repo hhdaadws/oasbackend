@@ -22,6 +22,10 @@ type managerRedeemKeyRequest struct {
 	Code string `json:"code" binding:"required,min=6,max=64"`
 }
 
+type managerPutAliasRequest struct {
+	Alias string `json:"alias" binding:"max=64"`
+}
+
 type createActivationCodeRequest struct {
 	DurationDays int    `json:"duration_days" binding:"required,min=1,max=3650"`
 	UserType     string `json:"user_type" binding:"required,oneof=daily duiyi shuaka"`
@@ -46,6 +50,10 @@ type managerPatchUserLifecycleRequest struct {
 type superPatchManagerLifecycleRequest struct {
 	ExpiresAt  string `json:"expires_at"`
 	ExtendDays int    `json:"extend_days"`
+}
+
+type superResetManagerPasswordRequest struct {
+	NewPassword string `json:"new_password" binding:"required,min=6,max=128"`
 }
 
 type putUserAssetsRequest struct {
@@ -79,10 +87,11 @@ type agentPollJobsRequest struct {
 }
 
 type agentJobUpdateRequest struct {
-	NodeID       string `json:"node_id" binding:"required,min=3,max=128"`
-	Message      string `json:"message"`
-	ErrorCode    string `json:"error_code"`
-	LeaseSeconds int    `json:"lease_seconds"`
+	NodeID       string         `json:"node_id" binding:"required,min=3,max=128"`
+	Message      string         `json:"message"`
+	ErrorCode    string         `json:"error_code"`
+	LeaseSeconds int            `json:"lease_seconds"`
+	Result       map[string]any `json:"result"`
 }
 
 // ── Batch request types ───────────────────────────────
@@ -119,4 +128,8 @@ type batchRenewalKeyDeleteRequest struct {
 
 type batchActivationCodeDeleteRequest struct {
 	CodeIDs []uint `json:"code_ids" binding:"required,min=1,max=500"`
+}
+
+type batchUserDeleteRequest struct {
+	UserIDs []uint `json:"user_ids" binding:"required,min=1,max=500"`
 }

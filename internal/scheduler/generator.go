@@ -238,9 +238,8 @@ func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap
 
 	priority := toInt(taskMap["priority"], 50)
 	payload := map[string]any{
-		"user_id":          user.ID,
-		"local_account_id": user.ID,
-		"source":           "cloud_scheduler",
+		"user_id": user.ID,
+		"source":  "cloud_scheduler",
 	}
 	if value, ok := taskMap["payload"].(map[string]any); ok {
 		for key, item := range value {

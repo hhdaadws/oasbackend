@@ -8,7 +8,7 @@
           <el-button type="primary" size="small" @click="showCreateDialog = true">生成激活码</el-button>
         </div>
       </div>
-      <div class="filter-row" style="margin-bottom:12px">
+      <div class="filter-row filter-row-spaced">
         <el-input v-model="filters.keyword" placeholder="按激活码检索" clearable />
         <el-select v-model="filters.status" clearable placeholder="全部状态">
           <el-option label="未使用" value="unused" />
@@ -45,7 +45,7 @@
         <h3>激活码列表</h3>
         <div class="row-actions">
           <template v-if="hasSelection">
-            <span class="muted" style="font-size:13px">已选 {{ selectedCount }} 项</span>
+            <span class="selection-count">已选 {{ selectedCount }} 项</span>
             <el-button type="danger" size="small" :loading="loading.batchDelete" @click="batchDelete">批量删除</el-button>
             <el-button size="small" plain @click="doClearSelection">取消</el-button>
           </template>
@@ -122,31 +122,30 @@
       </div>
     </section>
 
-    <el-dialog v-model="showCreateDialog" title="生成激活码" width="440px"
+    <el-dialog v-model="showCreateDialog" title="生成激活码" class="dialog-sm" append-to-body
       @close="latestActivationCode = ''; generatedCodes.value = []">
       <el-form :model="activationForm" label-width="100px">
         <el-form-item label="激活天数">
-          <el-input-number v-model="activationForm.duration_days" :min="1" :max="3650" style="width:100%" />
+          <el-input-number v-model="activationForm.duration_days" :min="1" :max="3650" class="w-full" />
         </el-form-item>
         <el-form-item label="类型">
-          <el-select v-model="activationForm.user_type" style="width:100%">
+          <el-select v-model="activationForm.user_type" class="w-full">
             <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="数量">
-          <el-input-number v-model="activationForm.count" :min="1" :max="50" style="width:100%" />
+          <el-input-number v-model="activationForm.count" :min="1" :max="50" class="w-full" />
         </el-form-item>
       </el-form>
       <template v-if="generatedCodes.length > 0">
-        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center">
+        <div class="generated-list-header">
           <span class="muted">已生成 {{ generatedCodes.length }} 个激活码</span>
           <el-button size="small" type="primary" plain @click="copyAllCodes">全部复制</el-button>
         </div>
-        <div style="max-height:200px;overflow-y:auto;margin-top:8px;display:flex;flex-direction:column;gap:6px">
-          <div v-for="(item, idx) in generatedCodes" :key="idx"
-            style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--glass-2);border-radius:6px">
+        <div class="generated-list-body">
+          <div v-for="(item, idx) in generatedCodes" :key="idx" class="generated-list-item">
             <el-tag type="info" size="small">{{ userTypeLabel(item.user_type) }}</el-tag>
-            <code style="flex:1;font-size:12px">{{ item.code }}</code>
+            <code>{{ item.code }}</code>
             <el-button size="small" plain @click="copyCode(item.code)">复制</el-button>
           </div>
         </div>

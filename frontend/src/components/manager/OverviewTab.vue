@@ -41,6 +41,13 @@
             <strong class="stat-value">{{ managerProfile.username || "-" }}</strong>
           </div>
           <div class="stat-item">
+            <span class="stat-label">别称</span>
+            <div class="alias-input-row">
+              <el-input v-model="aliasForm.alias" size="small" placeholder="未设置" clearable class="w-140" />
+              <el-button size="small" type="primary" plain :loading="loading.alias" @click="saveAlias">保存</el-button>
+            </div>
+          </div>
+          <div class="stat-item">
             <span class="stat-label">到期时间</span>
             <strong class="stat-value stat-time">{{ formatTime(managerProfile.expires_at) }}</strong>
           </div>
@@ -92,6 +99,7 @@ const loading = reactive({
   overview: false,
   profile: false,
   redeem: false,
+  alias: false,
 });
 
 const redeemForm = reactive({ code: "" });
@@ -99,9 +107,12 @@ const redeemForm = reactive({ code: "" });
 const managerProfile = reactive({
   id: 0,
   username: "",
+  alias: "",
   expires_at: "",
   expired: false,
 });
+
+const aliasForm = reactive({ alias: "" });
 
 const overview = reactive({
   user_stats: {
@@ -145,12 +156,28 @@ async function loadManagerProfile() {
     const response = await managerApi.me(props.token);
     managerProfile.id = response.id || 0;
     managerProfile.username = response.username || "";
+    managerProfile.alias = response.alias || "";
     managerProfile.expires_at = response.expires_at || "";
     managerProfile.expired = response.expired === true;
+    aliasForm.alias = managerProfile.alias;
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
     loading.profile = false;
+  }
+}
+
+async function saveAlias() {
+  loading.alias = true;
+  try {
+    const response = await managerApi.putMeAlias(props.token, { alias: aliasForm.alias });
+    managerProfile.alias = response.alias || "";
+    aliasForm.alias = managerProfile.alias;
+    ElMessage.success("别称更新成功");
+  } catch (error) {
+    ElMessage.error(parseApiError(error));
+  } finally {
+    loading.alias = false;
   }
 }
 
