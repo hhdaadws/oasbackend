@@ -44,6 +44,10 @@
             :selected-user-account-no="selectedUserAccountNo"
           />
         </el-tab-pane>
+
+        <el-tab-pane label="对弈竞猜" name="duiyi-answers">
+          <DuiyiAnswersTab :token="token" />
+        </el-tab-pane>
       </el-tabs>
     </template>
   </div>
@@ -57,6 +61,7 @@ import TaskPoolTab from "./TaskPoolTab.vue";
 import ActivationCodesTab from "./ActivationCodesTab.vue";
 import UsersTab from "./UsersTab.vue";
 import UserLogsTab from "./UserLogsTab.vue";
+import DuiyiAnswersTab from "./DuiyiAnswersTab.vue";
 
 const props = defineProps({
   token: {

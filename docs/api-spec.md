@@ -898,6 +898,63 @@ Manager 使用续费密钥续期。
 
 ---
 
+### 对弈竞猜答案配置
+
+#### GET /api/v1/manager/duiyi-answers
+
+获取当前管理员今日的对弈竞猜答案配置。
+
+**认证**: Manager JWT (Bearer Token)
+
+**响应 200**:
+```json
+{
+  "data": {
+    "date": "2026-02-20",
+    "answers": {
+      "10:00": "左",
+      "12:00": "右",
+      "14:00": null,
+      "16:00": null,
+      "18:00": null,
+      "20:00": null,
+      "22:00": null
+    }
+  }
+}
+```
+
+- `date`: 当日日期（北京时间），如无配置或日期过期则为 `null`
+- `answers`: 7个时间窗口（10:00~22:00）的答案，值为 `"左"`/`"右"` 或 `null`（未配置）
+
+#### PUT /api/v1/manager/duiyi-answers
+
+配置当日对弈竞猜答案。自动填充今日日期，替换已有配置。
+
+**认证**: Manager JWT (Bearer Token)
+
+**请求体**:
+```json
+{
+  "answers": {
+    "10:00": "左",
+    "12:00": "右",
+    "14:00": null
+  }
+}
+```
+
+**校验**:
+- key 必须为 `10:00`/`12:00`/`14:00`/`16:00`/`18:00`/`20:00`/`22:00` 之一
+- value 必须为 `"左"`、`"右"` 或 `null`
+- 未传递的窗口默认为 `null`
+
+**响应 200**: 同 GET 格式
+
+**响应 400**: `{"detail": "无效的时间窗口: ..."}`
+
+---
+
 ## 5. User 端点
 
 > 认证：Opaque Token（通过注册或登录获取）
@@ -1658,9 +1715,9 @@ Agent 登录（使用 Manager 凭据）。
 
 ### GET /api/v1/user/scan/status
 
-查询当前扫码任务状态。
+查询当前扫码任务状态。优先返回活跃任务；若无活跃任务，返回 60 秒内刚完成的任务（便于轮询 fallback 检测完成状态）。
 
-**响应（有活跃任务）：**
+**响应（有活跃任务或 60 秒内完成的任务）：**
 ```json
 {
   "data": {
@@ -1748,12 +1805,22 @@ WebSocket 连接，实时推送扫码状态变更。
 
 **推送消息格式：**
 ```json
-{"type": "phase", "phase": "qrcode_ready", "screenshot": "<base64>"}
-{"type": "phase", "phase": "choose_system"}
+{"type": "phase_change", "phase": "qrcode_ready", "screenshot": "<base64>"}
+{"type": "need_choice", "phase": "choose_system", "choice_type": "system"}
+{"type": "need_choice", "phase": "choose_zone", "choice_type": "zone", "screenshot": "<base64>"}
+{"type": "need_choice", "phase": "choose_role", "choice_type": "role", "screenshot": "<base64>"}
 {"type": "completed", "phase": "done", "message": "扫码完成"}
 {"type": "failed", "message": "超时"}
 {"type": "cancelled", "message": "用户取消扫码"}
 ```
+
+**消息类型说明：**
+- `phase_change` — 非交互阶段变更（launching, qrcode_ready, entering 等）
+- `need_choice` — 需要用户选择的交互阶段，包含 `choice_type` 字段（system/zone/role）
+- `completed` — 扫码任务成功完成
+- `failed` / `cancelled` — 任务失败或取消
+
+> **注意：** 前端不显示 `pulling_data` 阶段，该阶段的 `phase_change` 消息会被前端忽略。
 
 ---
 

@@ -187,3 +187,7 @@ type agentScanFailRequest struct {
 	Message   string `json:"message"`
 	ErrorCode string `json:"error_code"`
 }
+
+type putDuiyiAnswersRequest struct {
+	Answers map[string]*string `json:"answers" binding:"required"`
+}

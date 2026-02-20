@@ -150,6 +150,22 @@ Agent 登录（使用 Manager 凭据）。
 - 返回的 job 已被该 node 锁定（leased），需要在 `lease_until` 之前报告状态，否则会被自动重新排队
 - `UserID` 为云端 `User.ID`，Oas2.0 需通过 `GameAccount.cloud_user_id` 查找本地账号
 
+**Payload 特殊字段 — 对弈竞猜（`duiyi_jingcai`）：**
+
+当 `TaskType` 为 `duiyi_jingcai` 时，`Payload` 中会额外包含 `"answer"` 字段，值为 `"左"` 或 `"右"`。此字段由云端调度器在生成任务时根据管理员配置的当前时间窗口答案自动注入。示例：
+
+```json
+{
+  "Payload": {
+    "user_id": 5,
+    "source": "cloud_scheduler",
+    "answer": "左"
+  }
+}
+```
+
+> 如果管理员未为当前时间窗口配置答案，则该时间窗口不会生成 `duiyi_jingcai` 任务。
+
 ---
 
 ### 4.3 POST /api/v1/agent/jobs/:job_id/start
@@ -697,16 +713,19 @@ waiting → launching → qrcode_ready → choose_system → choose_zone
        │                        │   返回 ScanJob   │
        │                        │────────────────>│
        │                        │   POST /scan/:id/start
-       │  WS: phase=launching   │<────────────────│
+       │ WS: phase_change       │<────────────────│
+       │  {launching}           │                 │
        │<───────────────────────│                 │
        │                        │   POST /scan/:id/phase
-       │  WS: qrcode截图        │   {qrcode_ready, screenshot}
-       │<───────────────────────│<────────────────│
+       │ WS: phase_change       │   {qrcode_ready, screenshot}
+       │  {qrcode截图}          │<────────────────│
+       │<───────────────────────│                 │
        │                        │                 │
        │  用户手机扫码           │                 │ 检测二维码消失
        │                        │   POST /scan/:id/phase
-       │  WS: choose_system     │   {choose_system}
-       │<───────────────────────│<────────────────│
+       │ WS: need_choice        │   {choose_system}
+       │  {choice_type:system}  │<────────────────│
+       │<───────────────────────│                 │
        │                        │                 │ GET /scan/:id/choice (轮询)
        │ POST /user/scan/choice │                 │
        │ {type:system,val:ios}  │                 │

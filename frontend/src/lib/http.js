@@ -297,6 +297,19 @@ export const managerApi = {
       data,
       headers: withBearer(token),
     }),
+  getDuiyiAnswers: (token) =>
+    request({
+      method: "GET",
+      url: "/manager/duiyi-answers",
+      headers: withBearer(token),
+    }),
+  putDuiyiAnswers: (token, payload) =>
+    request({
+      method: "PUT",
+      url: "/manager/duiyi-answers",
+      data: payload,
+      headers: withBearer(token),
+    }),
 };
 
 export const userApi = {

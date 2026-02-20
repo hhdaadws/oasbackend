@@ -170,6 +170,30 @@ func (g *Generator) runOnce(ctx context.Context) {
 		activeJobMap[jc.UserID][jc.TaskType] = jc.Cnt
 	}
 
+	// Batch preload: duiyi answer configs for all relevant managers (for 对弈竞猜)
+	managerIDSet := make(map[uint]struct{}, len(users))
+	for _, u := range users {
+		managerIDSet[u.ManagerID] = struct{}{}
+	}
+	managerIDs := make([]uint, 0, len(managerIDSet))
+	for mid := range managerIDSet {
+		managerIDs = append(managerIDs, mid)
+	}
+	var duiyiConfigs []models.DuiyiAnswerConfig
+	todayBJ := now.In(bjLoc).Format("2006-01-02")
+	if len(managerIDs) > 0 {
+		if err := g.db.Where("manager_id IN ? AND date = ?", managerIDs, todayBJ).
+			Find(&duiyiConfigs).Error; err != nil {
+			runErr = err
+			g.updateStats(now, generated, scanned, runErr)
+			return
+		}
+	}
+	duiyiAnswerMap := make(map[uint]map[string]any, len(duiyiConfigs))
+	for _, dc := range duiyiConfigs {
+		duiyiAnswerMap[dc.ManagerID] = map[string]any(dc.Answers)
+	}
+
 	workers := g.cfg.SchedulerWorkers
 	if workers <= 0 {
 		workers = 4
@@ -187,23 +211,23 @@ func (g *Generator) runOnce(ctx context.Context) {
 
 		sem <- struct{}{}
 		wg.Add(1)
-		go func(u models.User, c models.UserTaskConfig, jc map[string]int64) {
+		go func(u models.User, c models.UserTaskConfig, jc map[string]int64, da map[string]any) {
 			defer func() { <-sem; wg.Done() }()
-			userGenerated, err := g.processUser(ctx, u, c, jc, now)
+			userGenerated, err := g.processUser(ctx, u, c, jc, da, now)
 			mu.Lock()
 			if err != nil {
 				runErr = err
 			}
 			generated += userGenerated
 			mu.Unlock()
-		}(user, cfg, userJobCounts)
+		}(user, cfg, userJobCounts, duiyiAnswerMap[user.ManagerID])
 	}
 	wg.Wait()
 
 	g.updateStats(now, generated, scanned, runErr)
 }
 
-func (g *Generator) processUser(ctx context.Context, user models.User, cfg models.UserTaskConfig, activeJobCounts map[string]int64, now time.Time) (int, error) {
+func (g *Generator) processUser(ctx context.Context, user models.User, cfg models.UserTaskConfig, activeJobCounts map[string]int64, duiyiAnswers map[string]any, now time.Time) (int, error) {
 	storedTaskConfig := map[string]any(cfg.TaskConfig)
 	if storedTaskConfig == nil {
 		return 0, nil
@@ -220,6 +244,19 @@ func (g *Generator) processUser(ctx context.Context, user models.User, cfg model
 		enabled, hasEnabled := taskMap["enabled"].(bool)
 		if !hasEnabled || enabled != true {
 			continue
+		}
+
+		// 对弈竞猜: skip if no answer configured for current window
+		if taskType == "对弈竞猜" {
+			bjHour := now.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Hour()
+			window := currentDuiyiWindow(bjHour)
+			if window == "" {
+				continue
+			}
+			ans, _ := duiyiAnswers[window].(string)
+			if ans != "左" && ans != "右" {
+				continue
+			}
 		}
 
 		due, slot, dedupeTTL, nextTime := g.evaluateDue(taskMap, now)
@@ -242,7 +279,7 @@ func (g *Generator) processUser(ctx context.Context, user models.User, cfg model
 			continue
 		}
 
-		created, err := g.createJobIfNeeded(user, taskType, taskMap, nextTime, activeJobCounts, now)
+		created, err := g.createJobIfNeeded(user, taskType, taskMap, nextTime, activeJobCounts, duiyiAnswers, now)
 		if err != nil {
 			return generated, err
 		}
@@ -275,7 +312,7 @@ func jsonMapEqual(left map[string]any, right map[string]any) bool {
 	return reflect.DeepEqual(left, right)
 }
 
-func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap map[string]any, nextTime time.Time, activeJobCounts map[string]int64, now time.Time) (bool, error) {
+func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap map[string]any, nextTime time.Time, activeJobCounts map[string]int64, duiyiAnswers map[string]any, now time.Time) (bool, error) {
 	// Use preloaded active job counts instead of individual COUNT query
 	if activeJobCounts != nil && activeJobCounts[taskType] > 0 {
 		return false, nil
@@ -289,6 +326,16 @@ func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap
 	if value, ok := taskMap["payload"].(map[string]any); ok {
 		for key, item := range value {
 			payload[key] = item
+		}
+	}
+
+	// 对弈竞猜: inject answer into payload
+	if taskType == "对弈竞猜" && duiyiAnswers != nil {
+		bjHour := now.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Hour()
+		if window := currentDuiyiWindow(bjHour); window != "" {
+			if ans, _ := duiyiAnswers[window].(string); ans == "左" || ans == "右" {
+				payload["answer"] = ans
+			}
 		}
 	}
 
@@ -420,4 +467,24 @@ func parseDateTime(value string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// ── Duiyi (对弈竞猜) window helpers ─────────────────────
+
+var duiyiWindows = []string{"10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"}
+
+// currentDuiyiWindow returns the applicable window for the given Beijing hour,
+// or "" if outside the 10:00–22:00 range.
+func currentDuiyiWindow(bjHour int) string {
+	if bjHour < 10 {
+		return ""
+	}
+	result := ""
+	for _, w := range duiyiWindows {
+		h, _ := strconv.Atoi(strings.Split(w, ":")[0])
+		if bjHour >= h {
+			result = w
+		}
+	}
+	return result
 }

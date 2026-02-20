@@ -176,6 +176,14 @@ type AgentNode struct {
 	UpdatedAt     time.Time `gorm:"not null"`
 }
 
+type DuiyiAnswerConfig struct {
+	ID        uint              `gorm:"primaryKey"`
+	ManagerID uint              `gorm:"not null;uniqueIndex"`
+	Date      string            `gorm:"size:10;not null"`
+	Answers   datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	UpdatedAt time.Time         `gorm:"not null"`
+}
+
 type AuditLog struct {
 	ID         uint              `gorm:"primaryKey"`
 	ActorType  string            `gorm:"size:20;not null;index;index:idx_audit_logs_actor,priority:1"`
@@ -220,6 +228,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&TaskJobEvent{},
 		&AgentNode{},
 		&AuditLog{},
+		&DuiyiAnswerConfig{},
 		&ScanJob{},
 	); err != nil {
 		return err

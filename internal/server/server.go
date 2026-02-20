@@ -218,6 +218,8 @@ func (s *Server) mountRoutes() {
 		managerGroup.POST("/activation-codes/batch-revoke", s.managerBatchRevokeActivationCodes)
 		managerGroup.DELETE("/activation-codes/:id", s.managerDeleteActivationCode)
 		managerGroup.POST("/activation-codes/batch-delete", s.managerBatchDeleteActivationCodes)
+		managerGroup.GET("/duiyi-answers", s.managerGetDuiyiAnswers)
+		managerGroup.PUT("/duiyi-answers", s.managerPutDuiyiAnswers)
 	}
 
 	userGroup := api.Group("/user")
@@ -3875,4 +3877,112 @@ func uintSetKeys(m map[uint]struct{}) []uint {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// ── Duiyi Answer Config ─────────────────────────────────
+
+var duiyiValidWindows = map[string]bool{
+	"10:00": true, "12:00": true, "14:00": true, "16:00": true,
+	"18:00": true, "20:00": true, "22:00": true,
+}
+
+var duiyiWindowList = []string{"10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"}
+
+func (s *Server) managerGetDuiyiAnswers(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
+	todayBJ := time.Now().UTC().In(bjLoc).Format("2006-01-02")
+
+	var cfg models.DuiyiAnswerConfig
+	err := s.db.Where("manager_id = ?", managerID).First(&cfg).Error
+
+	answers := make(map[string]any, 7)
+	for _, w := range duiyiWindowList {
+		answers[w] = nil
+	}
+
+	var dateOut any = nil
+	if err == nil && cfg.Date == todayBJ {
+		dateOut = cfg.Date
+		stored := map[string]any(cfg.Answers)
+		for _, w := range duiyiWindowList {
+			if v, ok := stored[w]; ok {
+				answers[w] = v
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"date":    dateOut,
+			"answers": answers,
+		},
+	})
+}
+
+func (s *Server) managerPutDuiyiAnswers(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+
+	var req putDuiyiAnswersRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "请求格式错误"})
+		return
+	}
+
+	// Validate
+	validated := make(map[string]any, 7)
+	for _, w := range duiyiWindowList {
+		validated[w] = nil
+	}
+	for key, valPtr := range req.Answers {
+		if !duiyiValidWindows[key] {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("无效的时间窗口: %s", key)})
+			return
+		}
+		if valPtr == nil {
+			validated[key] = nil
+		} else if *valPtr == "左" || *valPtr == "右" {
+			validated[key] = *valPtr
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("无效的答案值: %s（仅支持 左/右）", *valPtr)})
+			return
+		}
+	}
+
+	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
+	todayBJ := time.Now().UTC().In(bjLoc).Format("2006-01-02")
+	now := time.Now().UTC()
+
+	cfg := models.DuiyiAnswerConfig{
+		ManagerID: managerID,
+		Date:      todayBJ,
+		Answers:   datatypes.JSONMap(validated),
+		UpdatedAt: now,
+	}
+
+	result := s.db.Where("manager_id = ?", managerID).First(&models.DuiyiAnswerConfig{})
+	if result.Error != nil && errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		if err := s.db.Create(&cfg).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存失败"})
+			return
+		}
+	} else {
+		if err := s.db.Model(&models.DuiyiAnswerConfig{}).
+			Where("manager_id = ?", managerID).
+			Updates(map[string]any{
+				"date":       todayBJ,
+				"answers":    datatypes.JSONMap(validated),
+				"updated_at": now,
+			}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存失败"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"date":    todayBJ,
+			"answers": validated,
+		},
+	})
 }
