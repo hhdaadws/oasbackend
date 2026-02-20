@@ -2,6 +2,9 @@ package main
 
 import (
 	"log"
+	"log/slog"
+	"os"
+	"strings"
 
 	"oas-cloud-go/internal/cache"
 	"oas-cloud-go/internal/config"
@@ -14,6 +17,27 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	// Initialize structured logging
+	var level slog.Level
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn", "warning":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	if strings.ToLower(cfg.LogFormat) == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+	slog.SetDefault(slog.New(handler))
 
 	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{})
 	if err != nil {

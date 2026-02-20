@@ -2,7 +2,7 @@ package server
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -58,7 +58,7 @@ func (h *ScanWSHub) Register(userID uint, conn *websocket.Conn) *ScanWSClient {
 	client := &ScanWSClient{
 		userID: userID,
 		conn:   conn,
-		send:   make(chan []byte, 16),
+		send:   make(chan []byte, 64),
 		done:   make(chan struct{}),
 	}
 	h.clients[userID] = client
@@ -91,7 +91,7 @@ func (h *ScanWSHub) NotifyUser(userID uint, msg ScanWSMessage) {
 	select {
 	case client.send <- data:
 	default:
-		// buffer full, skip
+		slog.Warn("scan_ws message dropped, buffer full", "user_id", client.userID)
 	}
 }
 
@@ -161,7 +161,7 @@ func (s *Server) userScanWS(c *gin.Context) {
 
 	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("ws upgrade error: %v", err)
+		slog.Error("websocket upgrade error", "error", err)
 		return
 	}
 

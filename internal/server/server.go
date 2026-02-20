@@ -5,7 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/mail"
@@ -57,7 +57,7 @@ func New(cfg config.Config, db *gorm.DB, redisStore cache.Store) *Server {
 		redisStore:   redisStore,
 		tokenManager: auth.NewTokenManager(cfg.JWTSecret),
 		router:       gin.New(),
-		auditCh:      make(chan models.AuditLog, 256),
+		auditCh:      make(chan models.AuditLog, 1024),
 		notifyCh:     make(chan notify.NotifyRequest, 256),
 		notifier:     notify.NewNotifier(),
 		scanWSHub:    newScanWSHub(),
@@ -67,9 +67,11 @@ func New(cfg config.Config, db *gorm.DB, redisStore cache.Store) *Server {
 		app.generator.Start()
 	}
 	go app.auditWorker()
-	go app.notifyWorker()
+	for i := 0; i < 3; i++ {
+		go app.notifyWorker()
+	}
 	go app.scanJobTimeoutWorker()
-	app.router.Use(gin.Logger(), gin.Recovery(), gzip.Gzip(gzip.DefaultCompression))
+	app.router.Use(gin.Logger(), gin.Recovery(), gzip.Gzip(gzip.BestSpeed))
 	app.mountRoutes()
 	return app
 }
@@ -85,7 +87,7 @@ func (s *Server) Run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("server listening on %s", s.cfg.Addr)
+		slog.Info("server listening", "addr", s.cfg.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
@@ -99,7 +101,7 @@ func (s *Server) Run() error {
 	case err := <-errCh:
 		return fmt.Errorf("server error: %w", err)
 	case sig := <-quit:
-		log.Printf("received signal %v, shutting down gracefully...", sig)
+		slog.Info("received shutdown signal", "signal", sig)
 	}
 
 	if s.generator != nil {
@@ -111,7 +113,7 @@ func (s *Server) Run() error {
 	if err := srv.Shutdown(ctx); err != nil {
 		return fmt.Errorf("server forced to shutdown: %w", err)
 	}
-	log.Println("server exited gracefully")
+	slog.Info("server exited gracefully")
 	return nil
 }
 
@@ -157,12 +159,15 @@ func (s *Server) mountRoutes() {
 		api.GET("/scheduler/status", s.schedulerStatus)
 		api.GET("/task-templates", s.taskTemplates)
 		api.POST("/bootstrap/init", s.bootstrapInit)
-		api.POST("/super/auth/login", s.superLogin)
-		api.POST("/manager/auth/register", s.managerRegister)
-		api.POST("/manager/auth/login", s.managerLogin)
-		api.POST("/user/auth/register-by-code", s.userRegisterByCode)
-		api.POST("/user/auth/login", s.userLogin)
-		api.POST("/agent/auth/login", s.agentLogin)
+
+		// Auth endpoints with stricter rate limiting (20 req/min per IP)
+		authRL := s.rateLimitByIP("auth", 20, time.Minute)
+		api.POST("/super/auth/login", authRL, s.superLogin)
+		api.POST("/manager/auth/register", authRL, s.managerRegister)
+		api.POST("/manager/auth/login", authRL, s.managerLogin)
+		api.POST("/user/auth/register-by-code", authRL, s.userRegisterByCode)
+		api.POST("/user/auth/login", authRL, s.userLogin)
+		api.POST("/agent/auth/login", authRL, s.agentLogin)
 	}
 
 	superGroup := api.Group("/super")
@@ -240,7 +245,7 @@ func (s *Server) mountRoutes() {
 	agentGroup := api.Group("/agent")
 	agentGroup.Use(s.requireJWT(models.ActorTypeAgent))
 	{
-		agentGroup.POST("/poll-jobs", s.agentPollJobs)
+		agentGroup.POST("/poll-jobs", s.rateLimitByActor("poll", 2, time.Second), s.agentPollJobs)
 		agentGroup.POST("/jobs/:job_id/start", s.agentJobStart)
 		agentGroup.POST("/jobs/:job_id/heartbeat", s.agentJobHeartbeat)
 		agentGroup.POST("/jobs/:job_id/complete", s.agentJobComplete)
@@ -283,6 +288,7 @@ func (s *Server) taskTemplates(c *gin.Context) {
 		return
 	}
 	userType := models.NormalizeUserType(rawType)
+	c.Header("Cache-Control", "public, max-age=3600")
 	c.JSON(http.StatusOK, gin.H{
 		"user_type":            userType,
 		"supported_user_types": taskmeta.UserTypes(),
@@ -317,7 +323,12 @@ func (s *Server) mountFrontendRoutes() {
 
 	assetsPath := filepath.Join(distDir, "assets")
 	if stat, err := os.Stat(assetsPath); err == nil && stat.IsDir() {
-		s.router.Static("/assets", assetsPath)
+		assetsGroup := s.router.Group("/assets")
+		assetsGroup.Use(func(c *gin.Context) {
+			c.Header("Cache-Control", "public, max-age=31536000, immutable")
+			c.Next()
+		})
+		assetsGroup.Static("/", assetsPath)
 	}
 	s.router.GET("/", func(c *gin.Context) {
 		c.File(indexPath)
@@ -1991,27 +2002,35 @@ func (s *Server) managerBatchUserLifecycle(c *gin.Context) {
 		}
 
 		// Slow path: ExtendDays > 0, each user has different expires_at based on current value
+		// Build batch CASE SQL to update all users in a single query
+		rawStatus := strings.TrimSpace(req.Status)
+		expiresCase := "CASE id "
+		statusCase := "CASE id "
 		for _, user := range users {
-			updates := map[string]any{"updated_at": now}
-			if hasExpires {
-				updates["expires_at"] = parsedExpires
-			}
 			newExpire := extendExpiry(user.ExpiresAt, req.ExtendDays, now)
-			updates["expires_at"] = newExpire
-			if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
-				updates["status"] = rawStatus
+			expiresCase += fmt.Sprintf("WHEN %d THEN '%s' ", user.ID, newExpire.UTC().Format(time.RFC3339))
+			if rawStatus != "" {
+				statusCase += fmt.Sprintf("WHEN %d THEN '%s' ", user.ID, rawStatus)
+			} else if newExpire.After(now) {
+				statusCase += fmt.Sprintf("WHEN %d THEN '%s' ", user.ID, models.UserStatusActive)
 			} else {
-				if newExpire.After(now) {
-					updates["status"] = models.UserStatusActive
-				} else {
-					updates["status"] = models.UserStatusExpired
-				}
+				statusCase += fmt.Sprintf("WHEN %d THEN '%s' ", user.ID, models.UserStatusExpired)
 			}
-			if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
-				return err
-			}
-			updated++
 		}
+		expiresCase += "END"
+		statusCase += "END"
+
+		result := tx.Model(&models.User{}).
+			Where("id IN ? AND manager_id = ?", req.UserIDs, managerID).
+			Updates(map[string]any{
+				"expires_at": gorm.Expr(expiresCase),
+				"status":     gorm.Expr(statusCase),
+				"updated_at": now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		updated = result.RowsAffected
 		return nil
 	})
 	if err != nil {
@@ -2356,6 +2375,12 @@ func (s *Server) userLogout(c *gin.Context) {
 	userID := getUint(c, ctxUserIDKey)
 	tokenID := getUint(c, ctxUserTokenIDKey)
 	now := time.Now().UTC()
+
+	// Load token hash before revoking so we can clear the cache
+	var token models.UserToken
+	if err := s.db.Select("id, token_hash").Where("id = ? AND user_id = ?", tokenID, userID).First(&token).Error; err == nil && token.TokenHash != "" {
+		_ = s.redisStore.ClearUserTokenCache(c.Request.Context(), token.TokenHash)
+	}
 
 	result := s.db.Model(&models.UserToken{}).
 		Where("id = ? AND user_id = ? AND revoked_at IS NULL", tokenID, userID).
@@ -2743,47 +2768,47 @@ func (s *Server) agentPollJobs(c *gin.Context) {
 	leaseTTL := time.Duration(req.LeaseSeconds) * time.Second
 	leaseUntil := now.Add(leaseTTL)
 
-	leasedJobs := make([]models.TaskJob, 0, req.Limit)
+	// Upsert agent node (outside main transaction)
+	_ = s.upsertAgentNodeTx(s.db, managerID, req.NodeID, "", now)
+
+	// Phase 1: Reset expired leases (outside main transaction to reduce lock scope)
+	s.resetExpiredJobLeases(ctx, managerID, now)
+
+	// Phase 2: Acquire candidates with SKIP LOCKED (short transaction)
+	candidates := make([]models.TaskJob, 0, req.Limit)
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := s.upsertAgentNodeTx(tx, managerID, req.NodeID, "", now); err != nil {
-			return err
-		}
-		var expiredJobs []models.TaskJob
-		if err := tx.Where("manager_id = ? AND status IN ? AND lease_until < ?", managerID, []string{models.JobStatusLeased, models.JobStatusRunning}, now).
-			Find(&expiredJobs).Error; err != nil {
-			return err
-		}
-		if len(expiredJobs) > 0 {
-			expiredIDs := make([]uint, 0, len(expiredJobs))
-			for _, item := range expiredJobs {
-				expiredIDs = append(expiredIDs, item.ID)
-			}
-			if err := tx.Model(&models.TaskJob{}).
-				Where("id IN ?", expiredIDs).
-				Updates(map[string]any{"status": models.JobStatusPending, "leased_by_node": "", "lease_until": nil, "updated_at": now, "attempts": gorm.Expr("attempts + 1")}).
-				Error; err != nil {
-				return err
-			}
-			for _, id := range expiredIDs {
-				_ = s.redisStore.ClearJobLease(ctx, managerID, id)
-			}
-		}
-
-		candidates := make([]models.TaskJob, 0, req.Limit)
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+		return tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where("manager_id = ? AND status = ? AND scheduled_at <= ?", managerID, models.JobStatusPending, now).
-			Order("priority desc").Order("scheduled_at asc").Limit(req.Limit).Find(&candidates).Error; err != nil {
-			return err
-		}
-		for _, job := range candidates {
-			acquired, err := s.redisStore.AcquireJobLease(ctx, managerID, job.ID, req.NodeID, leaseTTL)
-			if err != nil {
-				return err
-			}
-			if !acquired {
-				continue
-			}
+			Order("priority desc").Order("scheduled_at asc").Limit(req.Limit).Find(&candidates).Error
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取任务失败"})
+		return
+	}
 
+	// Phase 3: Try Redis leases (outside DB transaction)
+	type leasedCandidate struct {
+		job models.TaskJob
+	}
+	var leased []leasedCandidate
+	for _, job := range candidates {
+		acquired, err := s.redisStore.AcquireJobLease(ctx, managerID, job.ID, req.NodeID, leaseTTL)
+		if err != nil || !acquired {
+			continue
+		}
+		leased = append(leased, leasedCandidate{job: job})
+	}
+
+	if len(leased) == 0 {
+		c.JSON(http.StatusOK, gin.H{"jobs": []models.TaskJob{}, "lease_until": leaseUntil})
+		return
+	}
+
+	// Phase 4: Update leased jobs in DB (short transaction)
+	leasedJobs := make([]models.TaskJob, 0, len(leased))
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		for _, lc := range leased {
+			job := lc.job
 			updateResult := tx.Model(&models.TaskJob{}).Where("id = ? AND status = ?", job.ID, models.JobStatusPending).Updates(map[string]any{
 				"status":         models.JobStatusLeased,
 				"leased_by_node": req.NodeID,
@@ -2816,6 +2841,25 @@ func (s *Server) agentPollJobs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"jobs": leasedJobs, "lease_until": leaseUntil})
+}
+
+// resetExpiredJobLeases resets expired leased/running jobs back to pending.
+func (s *Server) resetExpiredJobLeases(ctx context.Context, managerID uint, now time.Time) {
+	var expiredJobs []models.TaskJob
+	if err := s.db.Where("manager_id = ? AND status IN ? AND lease_until < ?", managerID, []string{models.JobStatusLeased, models.JobStatusRunning}, now).
+		Find(&expiredJobs).Error; err != nil || len(expiredJobs) == 0 {
+		return
+	}
+	expiredIDs := make([]uint, 0, len(expiredJobs))
+	for _, item := range expiredJobs {
+		expiredIDs = append(expiredIDs, item.ID)
+	}
+	_ = s.db.Model(&models.TaskJob{}).
+		Where("id IN ?", expiredIDs).
+		Updates(map[string]any{"status": models.JobStatusPending, "leased_by_node": "", "lease_until": nil, "updated_at": now, "attempts": gorm.Expr("attempts + 1")}).Error
+	for _, id := range expiredIDs {
+		_ = s.redisStore.ClearJobLease(ctx, managerID, id)
+	}
 }
 
 func (s *Server) agentJobStart(c *gin.Context) {
@@ -3025,7 +3069,7 @@ func (s *Server) notifyWorker() {
 		var user models.User
 		if err := s.db.Select("id, account_no, username, notify_config").
 			Where("id = ?", req.UserID).First(&user).Error; err != nil {
-			log.Printf("[notify] failed to load user %d: %v", req.UserID, err)
+			slog.Warn("failed to load user for notification", "user_id", req.UserID, "error", err)
 			continue
 		}
 
@@ -3042,7 +3086,7 @@ func (s *Server) notifyWorker() {
 		if wechatEnabled && miaoCode != "" {
 			text := notify.BuildNotificationText(req)
 			if err := s.notifier.SendMiaoTiXing(miaoCode, text); err != nil {
-				log.Printf("[notify] wechat send failed for user %d: %v", req.UserID, err)
+				slog.Warn("wechat notification send failed", "user_id", req.UserID, "error", err)
 			}
 		}
 	}
@@ -3063,7 +3107,7 @@ func (s *Server) triggerTaskNotification(jobID uint, eventType string, message s
 		Message:   message,
 	}:
 	default:
-		log.Printf("[notify] channel full, dropping notification for job %d", jobID)
+		slog.Warn("notify channel full, dropping notification", "job_id", jobID)
 	}
 }
 
@@ -3216,7 +3260,7 @@ func (s *Server) agentReportLogs(c *gin.Context) {
 			})
 		}
 		if err := s.db.Create(&entries).Error; err != nil {
-			log.Printf("batch audit log insert failed: %v", err)
+			slog.Error("batch audit log insert failed", "error", err)
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "ok", "count": len(req.Logs)})
@@ -3664,8 +3708,11 @@ func (s *Server) audit(actorType string, actorID uint, action, targetType string
 	select {
 	case s.auditCh <- entry:
 	default:
-		// Channel full, write synchronously as fallback
-		_ = s.db.Create(&entry).Error
+		// Channel full, write asynchronously to avoid blocking the request
+		go func() {
+			_ = s.db.Create(&entry).Error
+		}()
+		slog.Warn("audit channel full, async fallback", "action", entry.Action)
 	}
 }
 
@@ -3679,7 +3726,7 @@ func (s *Server) auditWorker() {
 			return
 		}
 		if err := s.db.Create(&batch).Error; err != nil {
-			log.Printf("audit batch insert failed: %v", err)
+			slog.Error("audit batch insert failed", "error", err)
 		}
 		batch = batch[:0]
 	}

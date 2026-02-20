@@ -1,10 +1,9 @@
 package scheduler
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,18 +170,35 @@ func (g *Generator) runOnce(ctx context.Context) {
 		activeJobMap[jc.UserID][jc.TaskType] = jc.Cnt
 	}
 
+	workers := g.cfg.SchedulerWorkers
+	if workers <= 0 {
+		workers = 4
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
 	for _, user := range users {
 		cfg, hasCfg := configMap[user.ID]
 		if !hasCfg {
 			continue
 		}
 		userJobCounts := activeJobMap[user.ID]
-		userGenerated, err := g.processUser(ctx, user, cfg, userJobCounts, now)
-		if err != nil {
-			runErr = err
-		}
-		generated += userGenerated
+
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(u models.User, c models.UserTaskConfig, jc map[string]int64) {
+			defer func() { <-sem; wg.Done() }()
+			userGenerated, err := g.processUser(ctx, u, c, jc, now)
+			mu.Lock()
+			if err != nil {
+				runErr = err
+			}
+			generated += userGenerated
+			mu.Unlock()
+		}(user, cfg, userJobCounts)
 	}
+	wg.Wait()
 
 	g.updateStats(now, generated, scanned, runErr)
 }
@@ -256,12 +272,7 @@ func (g *Generator) processUser(ctx context.Context, user models.User, cfg model
 }
 
 func jsonMapEqual(left map[string]any, right map[string]any) bool {
-	leftRaw, leftErr := json.Marshal(left)
-	rightRaw, rightErr := json.Marshal(right)
-	if leftErr != nil || rightErr != nil {
-		return false
-	}
-	return bytes.Equal(leftRaw, rightRaw)
+	return reflect.DeepEqual(left, right)
 }
 
 func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap map[string]any, nextTime time.Time, activeJobCounts map[string]int64, now time.Time) (bool, error) {

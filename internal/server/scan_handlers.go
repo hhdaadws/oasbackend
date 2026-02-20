@@ -751,26 +751,49 @@ func (s *Server) scanJobTimeoutWorker() {
 	defer ticker.Stop()
 	for range ticker.C {
 		now := time.Now().UTC()
+		ctx := context.Background()
 
 		// 1. Lease timeout: leased/running jobs with expired lease
 		var expiredLeases []models.ScanJob
 		s.db.Where("status IN ? AND lease_until IS NOT NULL AND lease_until < ?",
 			[]string{models.ScanStatusLeased, models.ScanStatusRunning}, now).
 			Find(&expiredLeases)
-		for _, job := range expiredLeases {
-			job.Attempts++
-			if job.Attempts >= job.MaxAttempts {
-				job.Status = models.ScanStatusExpired
-				job.ErrorMessage = "租约超时"
-			} else {
-				job.Status = models.ScanStatusPending
-				job.Phase = models.ScanPhaseWaiting
+		if len(expiredLeases) > 0 {
+			// Split into retry vs expired groups
+			retryIDs := make([]uint, 0, len(expiredLeases))
+			expiredIDs := make([]uint, 0, len(expiredLeases))
+			allIDs := make([]uint, 0, len(expiredLeases))
+			for _, job := range expiredLeases {
+				allIDs = append(allIDs, job.ID)
+				if job.Attempts+1 >= job.MaxAttempts {
+					expiredIDs = append(expiredIDs, job.ID)
+				} else {
+					retryIDs = append(retryIDs, job.ID)
+				}
 			}
-			job.LeasedByNode = ""
-			job.LeaseUntil = nil
-			job.UpdatedAt = now
-			s.db.Save(&job)
-			_ = s.redisStore.ClearScanLease(context.Background(), job.ID)
+			if len(retryIDs) > 0 {
+				s.db.Model(&models.ScanJob{}).Where("id IN ?", retryIDs).Updates(map[string]any{
+					"status":         models.ScanStatusPending,
+					"phase":          models.ScanPhaseWaiting,
+					"leased_by_node": "",
+					"lease_until":    nil,
+					"attempts":       gorm.Expr("attempts + 1"),
+					"updated_at":     now,
+				})
+			}
+			if len(expiredIDs) > 0 {
+				s.db.Model(&models.ScanJob{}).Where("id IN ?", expiredIDs).Updates(map[string]any{
+					"status":         models.ScanStatusExpired,
+					"error_message":  "租约超时",
+					"leased_by_node": "",
+					"lease_until":    nil,
+					"attempts":       gorm.Expr("attempts + 1"),
+					"updated_at":     now,
+				})
+			}
+			for _, id := range allIDs {
+				_ = s.redisStore.ClearScanLease(ctx, id)
+			}
 		}
 
 		// 2. User heartbeat timeout (60 seconds)
@@ -779,16 +802,22 @@ func (s *Server) scanJobTimeoutWorker() {
 		s.db.Where("status = ? AND user_heartbeat IS NOT NULL AND user_heartbeat < ?",
 			models.ScanStatusRunning, heartbeatDeadline).
 			Find(&noHeartbeat)
-		for _, job := range noHeartbeat {
-			s.db.Model(&models.ScanJob{}).Where("id = ?", job.ID).Updates(map[string]any{
+		if len(noHeartbeat) > 0 {
+			hbIDs := make([]uint, 0, len(noHeartbeat))
+			for _, job := range noHeartbeat {
+				hbIDs = append(hbIDs, job.ID)
+			}
+			s.db.Model(&models.ScanJob{}).Where("id IN ?", hbIDs).Updates(map[string]any{
 				"status":        models.ScanStatusCancelled,
 				"error_message": "用户离开扫码页面",
 				"updated_at":    now,
 			})
-			if job.LeasedByNode != "" {
-				_ = s.redisStore.ReleaseScanLease(context.Background(), job.ID, job.LeasedByNode)
+			for _, job := range noHeartbeat {
+				if job.LeasedByNode != "" {
+					_ = s.redisStore.ReleaseScanLease(ctx, job.ID, job.LeasedByNode)
+				}
+				s.scanWSHub.NotifyUser(job.UserID, ScanWSMessage{Type: "failed", Message: "已取消：用户离开页面"})
 			}
-			s.scanWSHub.NotifyUser(job.UserID, ScanWSMessage{Type: "failed", Message: "已取消：用户离开页面"})
 		}
 
 		// 3. Total timeout (15 minutes)

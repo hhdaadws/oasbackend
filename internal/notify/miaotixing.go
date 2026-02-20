@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
@@ -48,7 +48,7 @@ type miaoResponse struct {
 func (n *Notifier) SendMiaoTiXing(miaoCode string, text string) error {
 	if lastSend, ok := n.rateLimiter.Load(miaoCode); ok {
 		if time.Since(lastSend.(time.Time)) < n.minInterval {
-			log.Printf("[notify] rate limited for miao_code=%s, skip", miaoCode)
+			slog.Debug("notification rate limited", "miao_code", miaoCode)
 			return nil
 		}
 	}
@@ -80,7 +80,7 @@ func (n *Notifier) SendMiaoTiXing(miaoCode string, text string) error {
 	if result.Code != 0 {
 		return fmt.Errorf("miaotixing error code=%d msg=%s", result.Code, result.Msg)
 	}
-	log.Printf("[notify] miaotixing sent ok for miao_code=%s", miaoCode)
+	slog.Debug("miaotixing notification sent", "miao_code", miaoCode)
 	return nil
 }
 

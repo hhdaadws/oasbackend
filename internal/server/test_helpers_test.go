@@ -30,6 +30,21 @@ type inMemoryStore struct {
 	scanCooldowns   map[uint]cooldownRecord
 	scanUserChoice  map[uint]map[string]string
 	scanHeartbeats  map[uint]time.Time
+	userTokenCache  map[string]userTokenCacheRecord
+	rateLimits      map[string]rateLimitRecord
+}
+
+type userTokenCacheRecord struct {
+	userID         uint
+	managerID      uint
+	status         string
+	expiresAt      time.Time
+	tokenExpiresAt time.Time
+}
+
+type rateLimitRecord struct {
+	count    int
+	expireAt time.Time
 }
 
 type cooldownRecord struct {
@@ -52,6 +67,8 @@ func newInMemoryStore() *inMemoryStore {
 		scanCooldowns:   map[uint]cooldownRecord{},
 		scanUserChoice:  map[uint]map[string]string{},
 		scanHeartbeats:  map[uint]time.Time{},
+		userTokenCache:  map[string]userTokenCacheRecord{},
+		rateLimits:      map[string]rateLimitRecord{},
 	}
 }
 
@@ -305,6 +322,50 @@ func (s *inMemoryStore) IsScanUserOnline(ctx context.Context, scanJobID uint) (b
 		return false, nil
 	}
 	return time.Since(hb) < 30*time.Second, nil
+}
+
+func (s *inMemoryStore) SetUserTokenCache(ctx context.Context, tokenHash string, userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.userTokenCache[tokenHash] = userTokenCacheRecord{
+		userID:         userID,
+		managerID:      managerID,
+		status:         status,
+		expiresAt:      expiresAt,
+		tokenExpiresAt: tokenExpiresAt,
+	}
+	return nil
+}
+
+func (s *inMemoryStore) GetUserTokenCache(ctx context.Context, tokenHash string) (uint, uint, string, time.Time, time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.userTokenCache[tokenHash]
+	if !ok {
+		return 0, 0, "", time.Time{}, time.Time{}, false, nil
+	}
+	return rec.userID, rec.managerID, rec.status, rec.expiresAt, rec.tokenExpiresAt, true, nil
+}
+
+func (s *inMemoryStore) ClearUserTokenCache(ctx context.Context, tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.userTokenCache, tokenHash)
+	return nil
+}
+
+func (s *inMemoryStore) CheckRateLimit(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	rec, ok := s.rateLimits[key]
+	if !ok || rec.expireAt.Before(now) {
+		s.rateLimits[key] = rateLimitRecord{count: 1, expireAt: now.Add(window)}
+		return true, nil
+	}
+	rec.count++
+	s.rateLimits[key] = rec
+	return rec.count <= limit, nil
 }
 
 func setupTestServer(t *testing.T) (*Server, *gorm.DB) {

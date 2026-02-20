@@ -1,7 +1,9 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -76,6 +78,33 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 
 		hash := auth.HashToken(raw)
 		now := time.Now().UTC()
+
+		// Try Redis cache first (avoids 2 DB queries on every request)
+		if userID, managerID, status, expiresAt, tokenExpiresAt, found, err := s.redisStore.GetUserTokenCache(c.Request.Context(), hash); err == nil && found {
+			if tokenExpiresAt.Before(now) {
+				c.JSON(http.StatusUnauthorized, gin.H{"detail": "无效的用户令牌"})
+				c.Abort()
+				return
+			}
+			if status != models.UserStatusActive {
+				c.JSON(http.StatusForbidden, gin.H{"detail": "用户账号未激活"})
+				c.Abort()
+				return
+			}
+			if expiresAt.IsZero() || !expiresAt.After(now) {
+				c.JSON(http.StatusForbidden, gin.H{"detail": "用户账号已过期"})
+				c.Abort()
+				return
+			}
+			c.Set(ctxActorRoleKey, models.ActorTypeUser)
+			c.Set(ctxActorIDKey, userID)
+			c.Set(ctxUserIDKey, userID)
+			c.Set(ctxManagerIDKey, managerID)
+			c.Next()
+			return
+		}
+
+		// Cache miss: query DB
 		var token models.UserToken
 		if err := s.db.Where("token_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, now).First(&token).Error; err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"detail": "无效的用户令牌"})
@@ -83,7 +112,7 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 			return
 		}
 		var user models.User
-		if err := s.db.Where("id = ?", token.UserID).First(&user).Error; err != nil {
+		if err := s.db.Select("id, status, expires_at, manager_id").Where("id = ?", token.UserID).First(&user).Error; err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"detail": "用户不存在"})
 			c.Abort()
 			return
@@ -98,6 +127,13 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+
+		// Cache in Redis for 2 minutes
+		tokenExpiresAt := token.ExpiresAt
+		if tokenExpiresAt.IsZero() {
+			tokenExpiresAt = now.Add(24 * time.Hour)
+		}
+		_ = s.redisStore.SetUserTokenCache(c.Request.Context(), hash, user.ID, user.ManagerID, user.Status, *user.ExpiresAt, tokenExpiresAt, 2*time.Minute)
 
 		// Throttle last_used_at updates: only write if >5 minutes since last update
 		if token.LastUsedAt == nil || now.Sub(*token.LastUsedAt) > 5*time.Minute {
@@ -156,6 +192,47 @@ func (s *Server) requireManagerActive() gin.HandlerFunc {
 
 		// Cache manager expiry in Redis for 1 minute
 		_ = s.redisStore.SetManagerExpiry(c.Request.Context(), managerID, *manager.ExpiresAt, time.Minute)
+		c.Next()
+	}
+}
+
+// rateLimitByIP returns a middleware that limits requests per IP using a fixed-window counter.
+func (s *Server) rateLimitByIP(scope string, limit int, window time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		windowKey := strconv.FormatInt(time.Now().Unix()/int64(window.Seconds()), 10)
+		key := fmt.Sprintf("%s:ip:%s:%s", scope, ip, windowKey)
+		allowed, _ := s.redisStore.CheckRateLimit(c.Request.Context(), key, limit, window)
+		if !allowed {
+			c.Header("Retry-After", strconv.Itoa(int(window.Seconds())))
+			c.JSON(http.StatusTooManyRequests, gin.H{"detail": "请求过于频繁，请稍后再试"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// rateLimitByActor returns a middleware that limits requests per authenticated actor (by managerID from context).
+func (s *Server) rateLimitByActor(scope string, limit int, window time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		actorID := getUint(c, ctxManagerIDKey)
+		if actorID == 0 {
+			actorID = getUint(c, ctxActorIDKey)
+		}
+		if actorID == 0 {
+			c.Next()
+			return
+		}
+		windowKey := strconv.FormatInt(time.Now().Unix()/int64(window.Seconds()), 10)
+		key := fmt.Sprintf("%s:actor:%d:%s", scope, actorID, windowKey)
+		allowed, _ := s.redisStore.CheckRateLimit(c.Request.Context(), key, limit, window)
+		if !allowed {
+			c.Header("Retry-After", strconv.Itoa(int(window.Seconds())))
+			c.JSON(http.StatusTooManyRequests, gin.H{"detail": "请求过于频繁，请稍后再试"})
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }

@@ -27,9 +27,12 @@ type Config struct {
 	SchedulerInterval  time.Duration
 	SchedulerScanLimit int
 	SchedulerSlotTTL   time.Duration
+	SchedulerWorkers   int
 	DBMaxOpenConns     int
 	DBMaxIdleConns     int
 	DBConnMaxLifetime  time.Duration
+	LogLevel           string
+	LogFormat          string
 }
 
 func Load() Config {
@@ -52,9 +55,12 @@ func Load() Config {
 		SchedulerInterval:  getDurationEnv("SCHEDULER_INTERVAL", 10*time.Second),
 		SchedulerScanLimit: getIntEnv("SCHEDULER_SCAN_LIMIT", 500),
 		SchedulerSlotTTL:   getDurationEnv("SCHEDULER_SLOT_TTL", 90*time.Second),
+		SchedulerWorkers:   getIntEnv("SCHEDULER_WORKERS", 4),
 		DBMaxOpenConns:     getIntEnv("DB_MAX_OPEN_CONNS", 25),
 		DBMaxIdleConns:     getIntEnv("DB_MAX_IDLE_CONNS", 10),
 		DBConnMaxLifetime:  getDurationEnv("DB_CONN_MAX_LIFETIME", 30*time.Minute),
+		LogLevel:           getEnv("LOG_LEVEL", "info"),
+		LogFormat:          getEnv("LOG_FORMAT", "text"),
 	}
 }
 
