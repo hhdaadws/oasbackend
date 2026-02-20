@@ -3034,7 +3034,7 @@ func (s *Server) updateTaskNextTime(jobID uint, eventType string, now time.Time)
 		return
 	}
 
-	taskMap["next_time"] = newNextTime.UTC().Format("2006-01-02 15:04")
+	taskMap["next_time"] = newNextTime.In(taskmeta.BJLoc).Format("2006-01-02 15:04")
 	taskConfig[job.TaskType] = taskMap
 
 	_ = s.db.Model(&models.UserTaskConfig{}).
@@ -3056,7 +3056,14 @@ func (s *Server) syncAgentResult(jobID uint, result map[string]any, now time.Tim
 	updates := map[string]any{"updated_at": now}
 
 	if status, ok := result["account_status"].(string); ok && status != "" {
-		updates["archive_status"] = status
+		// 验证并映射 account_status → archive_status
+		switch status {
+		case "active", "normal":
+			updates["archive_status"] = "normal"
+		case "invalid":
+			updates["archive_status"] = "invalid"
+		// 其他非法值忽略，不写入 archive_status
+		}
 	}
 
 	if assets, ok := result["assets"].(map[string]any); ok && len(assets) > 0 {

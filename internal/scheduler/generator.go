@@ -286,7 +286,7 @@ func (g *Generator) processUser(ctx context.Context, user models.User, cfg model
 		if created {
 			generated += 1
 			if !nextTime.IsZero() {
-				taskMap["next_time"] = nextTime.Format("2006-01-02 15:04")
+				taskMap["next_time"] = nextTime.In(taskmeta.BJLoc).Format("2006-01-02 15:04")
 				taskConfig[taskType] = taskMap
 				changed = true
 			}
@@ -363,20 +363,23 @@ func (g *Generator) evaluateDue(task map[string]any, now time.Time) (bool, strin
 		slotTTL = 90 * time.Second
 	}
 	nextRun := time.Time{}
+	bjNow := now.In(taskmeta.BJLoc)
 
 	nextRaw, hasNext := task["next_time"].(string)
 	if hasNext && strings.TrimSpace(nextRaw) != "" {
 		nextRaw = strings.TrimSpace(nextRaw)
 		if hhmm, ok := parseHHMM(nextRaw); ok {
-			target := time.Date(now.Year(), now.Month(), now.Day(), hhmm.hour, hhmm.minute, 0, 0, now.Location())
+			// HH:MM 视为北京时间每日任务
+			target := time.Date(bjNow.Year(), bjNow.Month(), bjNow.Day(), hhmm.hour, hhmm.minute, 0, 0, taskmeta.BJLoc)
 			if now.Before(target) {
 				return false, "", slotTTL, nextRun
 			}
-			slot := fmt.Sprintf("daily:%s:%02d%02d", now.Format("20060102"), hhmm.hour, hhmm.minute)
+			slot := fmt.Sprintf("daily:%s:%02d%02d", bjNow.Format("20060102"), hhmm.hour, hhmm.minute)
 			nextRun = target.Add(24 * time.Hour)
 			return true, slot, 26 * time.Hour, nextRun
 		}
 
+		// YYYY-MM-DD HH:MM 视为北京时间（parseDateTime 已用 BJLoc 解析）
 		parsed := parseDateTime(nextRaw)
 		if parsed.IsZero() || now.Before(parsed) {
 			return false, "", slotTTL, nextRun
@@ -385,11 +388,11 @@ func (g *Generator) evaluateDue(task map[string]any, now time.Time) (bool, strin
 		if failDelayMinutes > 0 {
 			nextRun = now.Add(time.Duration(failDelayMinutes) * time.Minute)
 		}
-		slot := "datetime:" + parsed.UTC().Format("200601021504")
+		slot := "datetime:" + parsed.In(taskmeta.BJLoc).Format("200601021504")
 		return true, slot, 24 * time.Hour, nextRun
 	}
 
-	slot := "rolling:" + now.UTC().Truncate(time.Minute).Format("200601021504")
+	slot := "rolling:" + bjNow.Truncate(time.Minute).Format("200601021504")
 	failDelayMinutes := toInt(task["fail_delay"], 0)
 	if failDelayMinutes > 0 {
 		nextRun = now.Add(time.Duration(failDelayMinutes) * time.Minute)
@@ -461,9 +464,9 @@ func parseDateTime(value string) time.Time {
 		"2006-01-02 15:04:05",
 	}
 	for _, layout := range layouts {
-		parsed, err := time.Parse(layout, value)
+		parsed, err := time.ParseInLocation(layout, value, taskmeta.BJLoc)
 		if err == nil {
-			return parsed.UTC()
+			return parsed
 		}
 	}
 	return time.Time{}
