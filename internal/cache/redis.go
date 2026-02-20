@@ -52,8 +52,8 @@ type Store interface {
 	SetScanUserHeartbeat(ctx context.Context, scanJobID uint) error
 	IsScanUserOnline(ctx context.Context, scanJobID uint) (bool, error)
 	// User token cache
-	SetUserTokenCache(ctx context.Context, tokenHash string, userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, ttl time.Duration) error
-	GetUserTokenCache(ctx context.Context, tokenHash string) (userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, found bool, err error)
+	SetUserTokenCache(ctx context.Context, tokenHash string, userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, tokenID uint, ttl time.Duration) error
+	GetUserTokenCache(ctx context.Context, tokenHash string) (userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, tokenID uint, found bool, err error)
 	ClearUserTokenCache(ctx context.Context, tokenHash string) error
 	// Rate limiting
 	CheckRateLimit(ctx context.Context, key string, limit int, window time.Duration) (allowed bool, err error)
@@ -420,7 +420,7 @@ func (r *RedisStore) IsScanUserOnline(ctx context.Context, scanJobID uint) (bool
 
 // ── User token cache ──────────────────────────────────
 
-func (r *RedisStore) SetUserTokenCache(ctx context.Context, tokenHash string, userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, ttl time.Duration) error {
+func (r *RedisStore) SetUserTokenCache(ctx context.Context, tokenHash string, userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, tokenID uint, ttl time.Duration) error {
 	if ttl <= 0 {
 		ttl = 2 * time.Minute
 	}
@@ -431,6 +431,7 @@ func (r *RedisStore) SetUserTokenCache(ctx context.Context, tokenHash string, us
 		"status":           status,
 		"expires_at":       expiresAt.UTC().Format(time.RFC3339),
 		"token_expires_at": tokenExpiresAt.UTC().Format(time.RFC3339),
+		"token_id":         tokenID,
 	}
 	pipe := r.client.TxPipeline()
 	pipe.HSet(ctx, key, fields)
@@ -439,21 +440,22 @@ func (r *RedisStore) SetUserTokenCache(ctx context.Context, tokenHash string, us
 	return err
 }
 
-func (r *RedisStore) GetUserTokenCache(ctx context.Context, tokenHash string) (uint, uint, string, time.Time, time.Time, bool, error) {
+func (r *RedisStore) GetUserTokenCache(ctx context.Context, tokenHash string) (uint, uint, string, time.Time, time.Time, uint, bool, error) {
 	key := r.key("user", "token", tokenHash)
 	vals, err := r.client.HGetAll(ctx, key).Result()
 	if err != nil {
-		return 0, 0, "", time.Time{}, time.Time{}, false, err
+		return 0, 0, "", time.Time{}, time.Time{}, 0, false, err
 	}
 	if len(vals) == 0 {
-		return 0, 0, "", time.Time{}, time.Time{}, false, nil
+		return 0, 0, "", time.Time{}, time.Time{}, 0, false, nil
 	}
 	userID, _ := strconv.ParseUint(vals["user_id"], 10, 64)
 	managerID, _ := strconv.ParseUint(vals["manager_id"], 10, 64)
 	status := vals["status"]
 	expiresAt, _ := time.Parse(time.RFC3339, vals["expires_at"])
 	tokenExpiresAt, _ := time.Parse(time.RFC3339, vals["token_expires_at"])
-	return uint(userID), uint(managerID), status, expiresAt, tokenExpiresAt, true, nil
+	tokenID, _ := strconv.ParseUint(vals["token_id"], 10, 64)
+	return uint(userID), uint(managerID), status, expiresAt, tokenExpiresAt, uint(tokenID), true, nil
 }
 
 func (r *RedisStore) ClearUserTokenCache(ctx context.Context, tokenHash string) error {

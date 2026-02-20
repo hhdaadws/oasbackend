@@ -40,6 +40,7 @@ type userTokenCacheRecord struct {
 	status         string
 	expiresAt      time.Time
 	tokenExpiresAt time.Time
+	tokenID        uint
 }
 
 type rateLimitRecord struct {
@@ -324,7 +325,7 @@ func (s *inMemoryStore) IsScanUserOnline(ctx context.Context, scanJobID uint) (b
 	return time.Since(hb) < 30*time.Second, nil
 }
 
-func (s *inMemoryStore) SetUserTokenCache(ctx context.Context, tokenHash string, userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, ttl time.Duration) error {
+func (s *inMemoryStore) SetUserTokenCache(ctx context.Context, tokenHash string, userID uint, managerID uint, status string, expiresAt time.Time, tokenExpiresAt time.Time, tokenID uint, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.userTokenCache[tokenHash] = userTokenCacheRecord{
@@ -333,18 +334,19 @@ func (s *inMemoryStore) SetUserTokenCache(ctx context.Context, tokenHash string,
 		status:         status,
 		expiresAt:      expiresAt,
 		tokenExpiresAt: tokenExpiresAt,
+		tokenID:        tokenID,
 	}
 	return nil
 }
 
-func (s *inMemoryStore) GetUserTokenCache(ctx context.Context, tokenHash string) (uint, uint, string, time.Time, time.Time, bool, error) {
+func (s *inMemoryStore) GetUserTokenCache(ctx context.Context, tokenHash string) (uint, uint, string, time.Time, time.Time, uint, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.userTokenCache[tokenHash]
 	if !ok {
-		return 0, 0, "", time.Time{}, time.Time{}, false, nil
+		return 0, 0, "", time.Time{}, time.Time{}, 0, false, nil
 	}
-	return rec.userID, rec.managerID, rec.status, rec.expiresAt, rec.tokenExpiresAt, true, nil
+	return rec.userID, rec.managerID, rec.status, rec.expiresAt, rec.tokenExpiresAt, rec.tokenID, true, nil
 }
 
 func (s *inMemoryStore) ClearUserTokenCache(ctx context.Context, tokenHash string) error {

@@ -80,7 +80,7 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 		now := time.Now().UTC()
 
 		// Try Redis cache first (avoids 2 DB queries on every request)
-		if userID, managerID, status, expiresAt, tokenExpiresAt, found, err := s.redisStore.GetUserTokenCache(c.Request.Context(), hash); err == nil && found {
+		if userID, managerID, status, expiresAt, tokenExpiresAt, tokenID, found, err := s.redisStore.GetUserTokenCache(c.Request.Context(), hash); err == nil && found {
 			if tokenExpiresAt.Before(now) {
 				c.JSON(http.StatusUnauthorized, gin.H{"detail": "无效的用户令牌"})
 				c.Abort()
@@ -99,6 +99,7 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 			c.Set(ctxActorRoleKey, models.ActorTypeUser)
 			c.Set(ctxActorIDKey, userID)
 			c.Set(ctxUserIDKey, userID)
+			c.Set(ctxUserTokenIDKey, tokenID)
 			c.Set(ctxManagerIDKey, managerID)
 			c.Next()
 			return
@@ -133,7 +134,7 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 		if tokenExpiresAt.IsZero() {
 			tokenExpiresAt = now.Add(24 * time.Hour)
 		}
-		_ = s.redisStore.SetUserTokenCache(c.Request.Context(), hash, user.ID, user.ManagerID, user.Status, *user.ExpiresAt, tokenExpiresAt, 2*time.Minute)
+		_ = s.redisStore.SetUserTokenCache(c.Request.Context(), hash, user.ID, user.ManagerID, user.Status, *user.ExpiresAt, tokenExpiresAt, token.ID, 2*time.Minute)
 
 		// Throttle last_used_at updates: only write if >5 minutes since last update
 		if token.LastUsedAt == nil || now.Sub(*token.LastUsedAt) > 5*time.Minute {
