@@ -130,9 +130,16 @@ func (s *Server) userScanStatus(c *gin.Context) {
 	now := time.Now().UTC()
 
 	var job models.ScanJob
-	err := s.db.Where("user_id = ? AND status NOT IN ?", userID,
-		[]string{models.ScanStatusSuccess, models.ScanStatusFailed, models.ScanStatusCancelled, models.ScanStatusExpired}).
+	// 先查活跃任务
+	err := s.db.Where("user_id = ? AND status IN ?", userID, scanActiveStatuses).
 		Order("id DESC").First(&job).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// 没有活跃任务，查找 60 秒内刚完成的任务（轮询 fallback）
+		recentCutoff := now.Add(-60 * time.Second)
+		err = s.db.Where("user_id = ? AND status NOT IN ? AND updated_at > ?", userID,
+			scanActiveStatuses, recentCutoff).
+			Order("id DESC").First(&job).Error
+	}
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		// No active job, return cooldown info
@@ -451,7 +458,7 @@ func (s *Server) agentScanStart(c *gin.Context) {
 	var job models.ScanJob
 	if err := s.db.Where("id = ?", scanJobID).First(&job).Error; err == nil {
 		s.scanWSHub.NotifyUser(job.UserID, ScanWSMessage{
-			Type:  "phase",
+			Type:  "phase_change",
 			Phase: models.ScanPhaseLaunching,
 		})
 	}
@@ -517,9 +524,16 @@ func (s *Server) agentScanPhase(c *gin.Context) {
 	// WebSocket push to user
 	var wsJob models.ScanJob
 	if err := s.db.Where("id = ?", scanJobID).First(&wsJob).Error; err == nil {
-		msg := ScanWSMessage{
-			Type:  "phase",
-			Phase: req.Phase,
+		choiceTypes := map[string]string{
+			models.ScanPhaseChooseSystem: "system",
+			models.ScanPhaseChooseZone:   "zone",
+			models.ScanPhaseChooseRole:   "role",
+		}
+		var msg ScanWSMessage
+		if ct, ok := choiceTypes[req.Phase]; ok {
+			msg = ScanWSMessage{Type: "need_choice", Phase: req.Phase, ChoiceType: ct}
+		} else {
+			msg = ScanWSMessage{Type: "phase_change", Phase: req.Phase}
 		}
 		if req.Screenshot != "" {
 			msg.Screenshot = req.Screenshot

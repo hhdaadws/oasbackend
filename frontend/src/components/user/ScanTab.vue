@@ -63,6 +63,7 @@ function handleWSMessage(msg) {
   switch (msg.type) {
     case "phase_change":
       choiceSubmitted.value = false;
+      if (msg.phase === "pulling_data") break;
       phase.value = msg.phase;
       if (msg.screenshot) screenshot.value = msg.screenshot;
       break;
@@ -127,7 +128,7 @@ function startStatusPoll() {
         } else if (d.status === "failed" || d.status === "expired" || d.status === "cancelled") {
           phase.value = "failed";
           errorMessage.value = d.error_message || "扫码失败";
-        } else if (d.phase && d.phase !== phase.value) {
+        } else if (d.phase && d.phase !== phase.value && d.phase !== "pulling_data") {
           choiceSubmitted.value = false;
           if (["choose_system", "choose_zone", "choose_role"].includes(d.phase)) {
             phase.value = d.phase;
@@ -435,11 +436,6 @@ const canStartScan = computed(() => {
           <el-button @click="cancelScan">取消</el-button>
         </template>
       </el-result>
-    </div>
-
-    <!-- Pulling Data -->
-    <div v-else-if="phase === 'pulling_data'" class="scan-status">
-      <el-result icon="info" title="正在抓取账号数据..." sub-title="即将完成" />
     </div>
 
     <!-- Done -->

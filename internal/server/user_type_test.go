@@ -133,7 +133,7 @@ func TestDuiyiUserCannotUpdateNonDuiyiTask(t *testing.T) {
 	}
 }
 
-func TestRedeemTypedCodeSwitchesUserTypeAndTaskPool(t *testing.T) {
+func TestRedeemMismatchedTypeCodeRejected(t *testing.T) {
 	srv, db := setupTestServer(t)
 	manager := createActiveManager(t, db, "manager_type_switch", "passwordTypeSwitch123")
 	managerToken := loginManagerToken(t, srv, manager.Username, "passwordTypeSwitch123")
@@ -191,31 +191,75 @@ func TestRedeemTypedCodeSwitchesUserTypeAndTaskPool(t *testing.T) {
 		map[string]any{"code": shuakaCode},
 		userToken,
 	)
-	if redeemResp.Code != http.StatusOK {
-		t.Fatalf("redeem shuaka code failed, status=%d body=%s", redeemResp.Code, redeemResp.Body.String())
+	if redeemResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for type mismatch redeem, got %d body=%s", redeemResp.Code, redeemResp.Body.String())
 	}
-	redeemPayload := decodeBodyMap(t, redeemResp.Body.Bytes())
-	if redeemPayload["user_type"] != "shuaka" {
-		t.Fatalf("expected user_type=shuaka after redeem, got %v", redeemPayload["user_type"])
-	}
+}
 
-	taskResp := doJSONRequest(
+func TestRedeemSameTypeCodeExtendsExpiry(t *testing.T) {
+	srv, db := setupTestServer(t)
+	manager := createActiveManager(t, db, "manager_same_type", "passwordSameType123")
+	managerToken := loginManagerToken(t, srv, manager.Username, "passwordSameType123")
+
+	createCode1Resp := doJSONRequest(
 		t,
 		srv.router,
-		http.MethodGet,
-		"/api/v1/user/me/tasks",
-		nil,
+		http.MethodPost,
+		"/api/v1/manager/activation-codes",
+		map[string]any{
+			"duration_days": 30,
+			"user_type":     "daily",
+		},
+		managerToken,
+	)
+	if createCode1Resp.Code != http.StatusCreated {
+		t.Fatalf("create activation code failed, status=%d body=%s", createCode1Resp.Code, createCode1Resp.Body.String())
+	}
+	code1 := decodeBodyMap(t, createCode1Resp.Body.Bytes())["code"].(string)
+
+	registerResp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodPost,
+		"/api/v1/user/auth/register-by-code",
+		map[string]any{"code": code1},
+		"",
+	)
+	if registerResp.Code != http.StatusCreated {
+		t.Fatalf("register failed, status=%d body=%s", registerResp.Code, registerResp.Body.String())
+	}
+	userToken := decodeBodyMap(t, registerResp.Body.Bytes())["token"].(string)
+
+	createCode2Resp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodPost,
+		"/api/v1/manager/activation-codes",
+		map[string]any{
+			"duration_days": 60,
+			"user_type":     "daily",
+		},
+		managerToken,
+	)
+	if createCode2Resp.Code != http.StatusCreated {
+		t.Fatalf("create second activation code failed, status=%d body=%s", createCode2Resp.Code, createCode2Resp.Body.String())
+	}
+	code2 := decodeBodyMap(t, createCode2Resp.Body.Bytes())["code"].(string)
+
+	redeemResp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodPost,
+		"/api/v1/user/auth/redeem-code",
+		map[string]any{"code": code2},
 		userToken,
 	)
-	if taskResp.Code != http.StatusOK {
-		t.Fatalf("get me tasks failed, status=%d body=%s", taskResp.Code, taskResp.Body.String())
+	if redeemResp.Code != http.StatusOK {
+		t.Fatalf("redeem same type code failed, status=%d body=%s", redeemResp.Code, redeemResp.Body.String())
 	}
-	taskConfig := decodeBodyMap(t, taskResp.Body.Bytes())["task_config"].(map[string]any)
-	if _, exists := taskConfig["起号_租借式神"]; !exists {
-		t.Fatalf("shuaka task pool should contain 起号_租借式神")
-	}
-	if _, exists := taskConfig["寄养"]; exists {
-		t.Fatalf("shuaka task pool should not contain 寄养")
+	redeemPayload := decodeBodyMap(t, redeemResp.Body.Bytes())
+	if redeemPayload["user_type"] != "daily" {
+		t.Fatalf("expected user_type=daily after redeem, got %v", redeemPayload["user_type"])
 	}
 }
 

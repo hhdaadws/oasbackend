@@ -965,7 +965,7 @@ Manager 使用续费密钥续期。
 
 ### POST /api/v1/user/auth/redeem-code
 
-用户兑换激活码（续期/切换类型）。
+用户兑换激活码（续期）。激活码的 `user_type` 必须与当前用户的 `user_type` 一致，否则返回 400。
 
 **请求：**
 ```json
@@ -977,11 +977,16 @@ Manager 使用续费密钥续期。
 {
   "data": {
     "expires_at": "2026-06-30T23:59:59Z",
-    "user_type": "duiyi",
+    "user_type": "daily",
     "extended_days": 30
   }
 }
 ```
+
+**错误响应：**
+- `400` — 激活码类型与账号类型不匹配
+- `403` — 激活码不属于您的管理员
+- `404` — 激活码不存在
 
 ---
 

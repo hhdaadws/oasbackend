@@ -2282,6 +2282,9 @@ func (s *Server) userRedeemCode(c *gin.Context) {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(&user).Error; err != nil {
 			return err
 		}
+		if models.NormalizeUserType(code.UserType) != models.NormalizeUserType(user.UserType) {
+			return fmt.Errorf("user_type mismatch")
+		}
 		newExpire := extendExpiry(user.ExpiresAt, code.DurationDays, now)
 		nextUserType := models.NormalizeUserType(code.UserType)
 		if err := tx.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]any{
@@ -2311,6 +2314,10 @@ func (s *Server) userRedeemCode(c *gin.Context) {
 		}
 		if strings.Contains(err.Error(), "forbidden") {
 			c.JSON(http.StatusForbidden, gin.H{"detail": "激活码不属于您的管理员"})
+			return
+		}
+		if strings.Contains(err.Error(), "user_type mismatch") {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "激活码类型与账号类型不匹配"})
 			return
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
