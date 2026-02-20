@@ -1635,7 +1635,7 @@ Agent 登录（使用 Manager 凭据）。
 ```
 
 **错误响应：**
-- `429` — 冷却中 `{"detail": "冷却中，请等待 X 秒后重试", "cooldown_remaining": 180}`
+- `429` — 冷却中 `{"detail": "冷却中，请等待 X 秒后重试", "cooldown_remaining_sec": 180}`
 - `409` — 已有进行中的扫码任务
 
 **冷却规则（阶梯式）：**
@@ -1677,7 +1677,7 @@ Agent 登录（使用 Manager 凭据）。
 {
   "data": {
     "active": false,
-    "cooldown_remaining": 120
+    "cooldown_remaining_sec": 120
   }
 }
 ```

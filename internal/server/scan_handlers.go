@@ -72,7 +72,7 @@ func (s *Server) userScanCreate(c *gin.Context) {
 			remaining := cooldownSecs - int(elapsed)
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"detail":            fmt.Sprintf("冷却中，请等待 %d 秒后重试", remaining),
-				"cooldown_remaining": remaining,
+				"cooldown_remaining_sec": remaining,
 			})
 			return
 		}
@@ -151,7 +151,7 @@ func (s *Server) userScanStatus(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{
 			"active":             false,
-			"cooldown_remaining": cooldownRemaining,
+			"cooldown_remaining_sec": cooldownRemaining,
 		}})
 		return
 	}

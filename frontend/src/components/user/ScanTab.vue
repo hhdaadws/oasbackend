@@ -17,6 +17,7 @@ const errorMessage = ref("");
 const loading = ref(false);
 const cooldownSec = ref(0);
 const cooldownTimer = ref(null);
+const choiceSubmitted = ref(false);
 
 let ws = null;
 let heartbeatInterval = null;
@@ -61,10 +62,12 @@ function connectWS() {
 function handleWSMessage(msg) {
   switch (msg.type) {
     case "phase_change":
+      choiceSubmitted.value = false;
       phase.value = msg.phase;
       if (msg.screenshot) screenshot.value = msg.screenshot;
       break;
     case "need_choice":
+      choiceSubmitted.value = false;
       phase.value = `choose_${msg.choice_type}`;
       if (msg.screenshot) screenshot.value = msg.screenshot;
       break;
@@ -125,6 +128,7 @@ function startStatusPoll() {
           phase.value = "failed";
           errorMessage.value = d.error_message || "扫码失败";
         } else if (d.phase && d.phase !== phase.value) {
+          choiceSubmitted.value = false;
           if (["choose_system", "choose_zone", "choose_role"].includes(d.phase)) {
             phase.value = d.phase;
           } else {
@@ -140,8 +144,9 @@ function startStatusPoll() {
         if (d.queue_position !== undefined) {
           queuePosition.value = d.queue_position;
         }
-        if (d.cooldown_remaining_sec !== undefined) {
+        if (d.cooldown_remaining_sec !== undefined && d.cooldown_remaining_sec > 0) {
           cooldownSec.value = d.cooldown_remaining_sec;
+          startCooldownTimer();
         }
       }
     } catch (e) {
@@ -173,6 +178,13 @@ async function startScan() {
     startHeartbeat();
     startStatusPoll();
   } catch (e) {
+    if (e?.response?.status === 429) {
+      const remaining = e.response.data?.cooldown_remaining_sec;
+      if (remaining > 0) {
+        cooldownSec.value = remaining;
+        startCooldownTimer();
+      }
+    }
     ElMessage.error(parseApiError(e));
   } finally {
     loading.value = false;
@@ -187,7 +199,7 @@ async function submitChoice(choiceType, value) {
       choice_type: choiceType,
       value: String(value),
     });
-    phase.value = "entering";
+    choiceSubmitted.value = true;
   } catch (e) {
     ElMessage.error(parseApiError(e));
   } finally {
@@ -213,6 +225,7 @@ function cleanup() {
   scanJobId.value = null;
   screenshot.value = "";
   errorMessage.value = "";
+  choiceSubmitted.value = false;
   phase.value = "idle";
 }
 
@@ -348,44 +361,71 @@ const canStartScan = computed(() => {
 
     <!-- Choose System -->
     <div v-else-if="phase === 'choose_system'" class="scan-choice">
-      <el-alert type="warning" :closable="false" show-icon title="请选择您的系统" style="margin-bottom: 16px" />
-      <div class="choice-buttons">
-        <el-button type="primary" size="large" :loading="loading" @click="submitChoice('system', 'ios')">
-          iOS (苹果)
-        </el-button>
-        <el-button type="success" size="large" :loading="loading" @click="submitChoice('system', 'android')">
-          Android (安卓)
-        </el-button>
-      </div>
-      <el-button style="margin-top: 12px" @click="cancelScan">取消</el-button>
+      <template v-if="choiceSubmitted">
+        <el-result icon="info" title="已提交选择" sub-title="等待系统处理中，请稍候...">
+          <template #extra>
+            <el-button @click="cancelScan">取消</el-button>
+          </template>
+        </el-result>
+      </template>
+      <template v-else>
+        <el-alert type="warning" :closable="false" show-icon title="请选择您的系统" style="margin-bottom: 16px" />
+        <div class="choice-buttons">
+          <el-button type="primary" size="large" :loading="loading" @click="submitChoice('system', 'ios')">
+            iOS (苹果)
+          </el-button>
+          <el-button type="success" size="large" :loading="loading" @click="submitChoice('system', 'android')">
+            Android (安卓)
+          </el-button>
+        </div>
+        <el-button style="margin-top: 12px" @click="cancelScan">取消</el-button>
+      </template>
     </div>
 
     <!-- Choose Zone -->
     <div v-else-if="phase === 'choose_zone'" class="scan-choice">
-      <el-alert type="warning" :closable="false" show-icon title="请选择您的大区" style="margin-bottom: 16px" />
-      <div v-if="screenshot" class="screenshot-container" style="margin-bottom: 16px">
-        <el-image :src="screenshot.startsWith('data:') ? screenshot : 'data:image/png;base64,' + screenshot" alt="选区" class="screenshot-img" :preview-src-list="[screenshot.startsWith('data:') ? screenshot : 'data:image/png;base64,' + screenshot]" fit="contain" />
-      </div>
-      <div class="choice-buttons">
-        <el-button v-for="n in 4" :key="n" type="primary" size="large" :loading="loading" @click="submitChoice('zone', n)">
-          第 {{ n }} 区
-        </el-button>
-      </div>
-      <el-button style="margin-top: 12px" @click="cancelScan">取消</el-button>
+      <template v-if="choiceSubmitted">
+        <el-result icon="info" title="已提交选择" sub-title="等待系统处理中，请稍候...">
+          <template #extra>
+            <el-button @click="cancelScan">取消</el-button>
+          </template>
+        </el-result>
+      </template>
+      <template v-else>
+        <el-alert type="warning" :closable="false" show-icon title="请选择您的大区" style="margin-bottom: 16px" />
+        <div v-if="screenshot" class="screenshot-container" style="margin-bottom: 16px">
+          <el-image :src="screenshot.startsWith('data:') ? screenshot : 'data:image/png;base64,' + screenshot" alt="选区" class="screenshot-img" :preview-src-list="[screenshot.startsWith('data:') ? screenshot : 'data:image/png;base64,' + screenshot]" fit="contain" />
+        </div>
+        <div class="choice-buttons">
+          <el-button v-for="n in 4" :key="n" type="primary" size="large" :loading="loading" @click="submitChoice('zone', n)">
+            第 {{ n }} 区
+          </el-button>
+        </div>
+        <el-button style="margin-top: 12px" @click="cancelScan">取消</el-button>
+      </template>
     </div>
 
     <!-- Choose Role -->
     <div v-else-if="phase === 'choose_role'" class="scan-choice">
-      <el-alert type="warning" :closable="false" show-icon title="请选择您的角色" style="margin-bottom: 16px" />
-      <div v-if="screenshot" class="screenshot-container" style="margin-bottom: 16px">
-        <el-image :src="screenshot.startsWith('data:') ? screenshot : 'data:image/png;base64,' + screenshot" alt="选角色" class="screenshot-img" :preview-src-list="[screenshot.startsWith('data:') ? screenshot : 'data:image/png;base64,' + screenshot]" fit="contain" />
-      </div>
-      <div class="choice-buttons">
-        <el-button v-for="n in 4" :key="n" type="primary" size="large" :loading="loading" @click="submitChoice('role', n)">
-          角色 {{ n }}
-        </el-button>
-      </div>
-      <el-button style="margin-top: 12px" @click="cancelScan">取消</el-button>
+      <template v-if="choiceSubmitted">
+        <el-result icon="info" title="已提交选择" sub-title="等待系统处理中，请稍候...">
+          <template #extra>
+            <el-button @click="cancelScan">取消</el-button>
+          </template>
+        </el-result>
+      </template>
+      <template v-else>
+        <el-alert type="warning" :closable="false" show-icon title="请选择您的角色" style="margin-bottom: 16px" />
+        <div v-if="screenshot" class="screenshot-container" style="margin-bottom: 16px">
+          <el-image :src="screenshot.startsWith('data:') ? screenshot : 'data:image/png;base64,' + screenshot" alt="选角色" class="screenshot-img" :preview-src-list="[screenshot.startsWith('data:') ? screenshot : 'data:image/png;base64,' + screenshot]" fit="contain" />
+        </div>
+        <div class="choice-buttons">
+          <el-button v-for="n in 4" :key="n" type="primary" size="large" :loading="loading" @click="submitChoice('role', n)">
+            角色 {{ n }}
+          </el-button>
+        </div>
+        <el-button style="margin-top: 12px" @click="cancelScan">取消</el-button>
+      </template>
     </div>
 
     <!-- Entering Game -->
