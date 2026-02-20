@@ -356,4 +356,27 @@ export const userApi = {
       params,
       headers: withBearer(token),
     }),
+  getMeLineup: (token) =>
+    request({
+      method: "GET",
+      url: "/user/me/lineup",
+      headers: withBearer(token),
+    }),
+  putMeLineup: (token, payload) =>
+    request({
+      method: "PUT",
+      url: "/user/me/lineup",
+      data: payload,
+      headers: withBearer(token),
+    }),
+  scanCreate: (token, payload) =>
+    request({ method: "POST", url: "/user/scan/create", data: payload, headers: withBearer(token) }),
+  scanStatus: (token) =>
+    request({ method: "GET", url: "/user/scan/status", headers: withBearer(token) }),
+  scanChoice: (token, payload) =>
+    request({ method: "POST", url: "/user/scan/choice", data: payload, headers: withBearer(token) }),
+  scanCancel: (token, payload) =>
+    request({ method: "POST", url: "/user/scan/cancel", data: payload, headers: withBearer(token) }),
+  scanHeartbeat: (token, payload) =>
+    request({ method: "POST", url: "/user/scan/heartbeat", data: payload, headers: withBearer(token) }),
 };

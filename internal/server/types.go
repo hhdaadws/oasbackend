@@ -133,3 +133,57 @@ type batchActivationCodeDeleteRequest struct {
 type batchUserDeleteRequest struct {
 	UserIDs []uint `json:"user_ids" binding:"required,min=1,max=500"`
 }
+
+// ── Scan request types ───────────────────────────────
+
+type userScanCreateRequest struct {
+	LoginID string `json:"login_id" binding:"max=64"`
+}
+
+type userScanChoiceRequest struct {
+	ScanJobID  uint   `json:"scan_job_id" binding:"required"`
+	ChoiceType string `json:"choice_type" binding:"required,oneof=system zone role"`
+	Value      string `json:"value" binding:"required"`
+}
+
+type userScanCancelRequest struct {
+	ScanJobID uint `json:"scan_job_id" binding:"required"`
+}
+
+type userScanHeartbeatRequest struct {
+	ScanJobID uint `json:"scan_job_id" binding:"required"`
+}
+
+type agentScanPollRequest struct {
+	NodeID       string `json:"node_id" binding:"required,min=3,max=128"`
+	Limit        int    `json:"limit"`
+	LeaseSeconds int    `json:"lease_seconds"`
+}
+
+type agentScanPhaseRequest struct {
+	NodeID        string `json:"node_id" binding:"required,min=3,max=128"`
+	Phase         string `json:"phase" binding:"required"`
+	Screenshot    string `json:"screenshot"`
+	ScreenshotKey string `json:"screenshot_key"`
+}
+
+type agentScanStartRequest struct {
+	NodeID       string `json:"node_id" binding:"required,min=3,max=128"`
+	LeaseSeconds int    `json:"lease_seconds"`
+}
+
+type agentScanHeartbeatRequest struct {
+	NodeID       string `json:"node_id" binding:"required,min=3,max=128"`
+	LeaseSeconds int    `json:"lease_seconds"`
+}
+
+type agentScanCompleteRequest struct {
+	NodeID  string `json:"node_id" binding:"required,min=3,max=128"`
+	Message string `json:"message"`
+}
+
+type agentScanFailRequest struct {
+	NodeID    string `json:"node_id" binding:"required,min=3,max=128"`
+	Message   string `json:"message"`
+	ErrorCode string `json:"error_code"`
+}

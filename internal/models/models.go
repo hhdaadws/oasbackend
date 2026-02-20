@@ -30,6 +30,27 @@ const (
 	JobStatusFailed   = "failed"
 	JobStatusRequeued = "timeout_requeued"
 
+	// ScanJob statuses
+	ScanStatusPending   = "pending"
+	ScanStatusLeased    = "leased"
+	ScanStatusRunning   = "running"
+	ScanStatusSuccess   = "success"
+	ScanStatusFailed    = "failed"
+	ScanStatusCancelled = "cancelled"
+	ScanStatusExpired   = "expired"
+
+	// ScanJob phases
+	ScanPhaseWaiting       = "waiting"
+	ScanPhaseLaunching     = "launching"
+	ScanPhaseQrcodeReady   = "qrcode_ready"
+	ScanPhaseQrcodeScanned = "qrcode_scanned"
+	ScanPhaseChooseSystem  = "choose_system"
+	ScanPhaseChooseZone    = "choose_zone"
+	ScanPhaseChooseRole    = "choose_role"
+	ScanPhaseEntering      = "entering"
+	ScanPhasePullingData   = "pulling_data"
+	ScanPhaseDone          = "done"
+
 	ActorTypeSuper   = "super"
 	ActorTypeManager = "manager"
 	ActorTypeUser    = "user"
@@ -120,8 +141,8 @@ type UserTaskConfig struct {
 
 type TaskJob struct {
 	ID           uint              `gorm:"primaryKey"`
-	ManagerID    uint              `gorm:"not null;index:idx_task_jobs_manager_status_scheduled,priority:1"`
-	UserID       uint              `gorm:"not null;index"`
+	ManagerID    uint              `gorm:"not null;index:idx_task_jobs_manager_status_scheduled,priority:1;index:idx_task_jobs_manager_user,priority:1"`
+	UserID       uint              `gorm:"not null;index;index:idx_task_jobs_manager_user,priority:2"`
 	TaskType     string            `gorm:"size:64;not null"`
 	Payload      datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
 	Priority     int               `gorm:"not null;default:0"`
@@ -157,14 +178,33 @@ type AgentNode struct {
 
 type AuditLog struct {
 	ID         uint              `gorm:"primaryKey"`
-	ActorType  string            `gorm:"size:20;not null;index"`
-	ActorID    uint              `gorm:"not null;index"`
+	ActorType  string            `gorm:"size:20;not null;index;index:idx_audit_logs_actor,priority:1"`
+	ActorID    uint              `gorm:"not null;index;index:idx_audit_logs_actor,priority:2"`
 	Action     string            `gorm:"size:64;not null;index"`
 	TargetType string            `gorm:"size:40;not null"`
 	TargetID   uint              `gorm:"not null"`
 	Detail     datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
 	IP         string            `gorm:"size:64"`
 	CreatedAt  time.Time         `gorm:"not null;index"`
+}
+
+type ScanJob struct {
+	ID            uint           `gorm:"primaryKey"`
+	ManagerID     uint           `gorm:"not null;index"`
+	UserID        uint           `gorm:"not null;index"`
+	LoginID       string         `gorm:"size:64;not null;default:''"`
+	Status        string         `gorm:"size:30;not null;default:pending;index"`
+	Phase         string         `gorm:"size:30;not null;default:waiting"`
+	LeasedByNode  string         `gorm:"size:128"`
+	LeaseUntil    *time.Time
+	Screenshots   datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'"`
+	UserChoice    datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'"`
+	ErrorMessage  string         `gorm:"size:500"`
+	Attempts      int            `gorm:"not null;default:0"`
+	MaxAttempts   int            `gorm:"not null;default:3"`
+	UserHeartbeat *time.Time
+	CreatedAt     time.Time `gorm:"not null"`
+	UpdatedAt     time.Time `gorm:"not null"`
 }
 
 func AutoMigrate(db *gorm.DB) error {
@@ -180,6 +220,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&TaskJobEvent{},
 		&AgentNode{},
 		&AuditLog{},
+		&ScanJob{},
 	); err != nil {
 		return err
 	}

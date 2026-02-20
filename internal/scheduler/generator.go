@@ -90,7 +90,9 @@ func (g *Generator) loop() {
 	for {
 		select {
 		case <-ticker.C:
-			g.runOnce(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			g.runOnce(ctx)
+			cancel()
 		case <-g.stopCh:
 			return
 		}
@@ -122,9 +124,60 @@ func (g *Generator) runOnce(ctx context.Context) {
 		return
 	}
 	scanned = len(users)
+	if scanned == 0 {
+		g.updateStats(now, generated, scanned, nil)
+		return
+	}
+
+	// Batch preload: user task configs (replaces N individual SELECT queries)
+	userIDs := make([]uint, len(users))
+	for i, u := range users {
+		userIDs[i] = u.ID
+	}
+	var configs []models.UserTaskConfig
+	if err := g.db.Where("user_id IN ?", userIDs).Find(&configs).Error; err != nil {
+		runErr = err
+		g.updateStats(now, generated, scanned, runErr)
+		return
+	}
+	configMap := make(map[uint]models.UserTaskConfig, len(configs))
+	for _, c := range configs {
+		configMap[c.UserID] = c
+	}
+
+	// Batch preload: active job counts per user+taskType (replaces N*M COUNT queries)
+	type jobCountRow struct {
+		UserID   uint   `gorm:"column:user_id"`
+		TaskType string `gorm:"column:task_type"`
+		Cnt      int64  `gorm:"column:cnt"`
+	}
+	var jobCounts []jobCountRow
+	activeStatuses := []string{models.JobStatusPending, models.JobStatusLeased, models.JobStatusRunning}
+	if err := g.db.Model(&models.TaskJob{}).
+		Select("user_id, task_type, COUNT(*) as cnt").
+		Where("user_id IN ? AND status IN ?", userIDs, activeStatuses).
+		Group("user_id, task_type").
+		Find(&jobCounts).Error; err != nil {
+		runErr = err
+		g.updateStats(now, generated, scanned, runErr)
+		return
+	}
+	// Build lookup: activeJobMap[userID][taskType] = count
+	activeJobMap := make(map[uint]map[string]int64, len(users))
+	for _, jc := range jobCounts {
+		if activeJobMap[jc.UserID] == nil {
+			activeJobMap[jc.UserID] = make(map[string]int64)
+		}
+		activeJobMap[jc.UserID][jc.TaskType] = jc.Cnt
+	}
 
 	for _, user := range users {
-		userGenerated, err := g.processUser(ctx, user, now)
+		cfg, hasCfg := configMap[user.ID]
+		if !hasCfg {
+			continue
+		}
+		userJobCounts := activeJobMap[user.ID]
+		userGenerated, err := g.processUser(ctx, user, cfg, userJobCounts, now)
 		if err != nil {
 			runErr = err
 		}
@@ -134,15 +187,7 @@ func (g *Generator) runOnce(ctx context.Context) {
 	g.updateStats(now, generated, scanned, runErr)
 }
 
-func (g *Generator) processUser(ctx context.Context, user models.User, now time.Time) (int, error) {
-	var cfg models.UserTaskConfig
-	if err := g.db.Where("user_id = ?", user.ID).First(&cfg).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return 0, nil
-		}
-		return 0, err
-	}
-
+func (g *Generator) processUser(ctx context.Context, user models.User, cfg models.UserTaskConfig, activeJobCounts map[string]int64, now time.Time) (int, error) {
 	storedTaskConfig := map[string]any(cfg.TaskConfig)
 	if storedTaskConfig == nil {
 		return 0, nil
@@ -181,7 +226,7 @@ func (g *Generator) processUser(ctx context.Context, user models.User, now time.
 			continue
 		}
 
-		created, err := g.createJobIfNeeded(user, taskType, taskMap, nextTime, now)
+		created, err := g.createJobIfNeeded(user, taskType, taskMap, nextTime, activeJobCounts, now)
 		if err != nil {
 			return generated, err
 		}
@@ -219,20 +264,9 @@ func jsonMapEqual(left map[string]any, right map[string]any) bool {
 	return bytes.Equal(leftRaw, rightRaw)
 }
 
-func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap map[string]any, nextTime time.Time, now time.Time) (bool, error) {
-	var count int64
-	if err := g.db.Model(&models.TaskJob{}).
-		Where(
-			"manager_id = ? AND user_id = ? AND task_type = ? AND status IN ?",
-			user.ManagerID,
-			user.ID,
-			taskType,
-			[]string{models.JobStatusPending, models.JobStatusLeased, models.JobStatusRunning},
-		).
-		Count(&count).Error; err != nil {
-		return false, err
-	}
-	if count > 0 {
+func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap map[string]any, nextTime time.Time, activeJobCounts map[string]int64, now time.Time) (bool, error) {
+	// Use preloaded active job counts instead of individual COUNT query
+	if activeJobCounts != nil && activeJobCounts[taskType] > 0 {
 		return false, nil
 	}
 

@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { parseApiError, userApi } from "../../lib/http";
-import { formatTime, eventTypeLabel, eventTypeTagType, jobStatusLabel, jobStatusTagType, errorCodeLabel } from "../../lib/helpers";
+import { formatTime } from "../../lib/helpers";
 import { usePagination } from "../../composables/usePagination";
 import TableSkeleton from "../shared/TableSkeleton.vue";
 
@@ -49,7 +49,7 @@ async function loadMeLogs() {
       <el-button plain :loading="loading.logs" @click="loadMeLogs">刷新日志</el-button>
     </div>
 
-    <TableSkeleton v-if="loading.logs && logs.length === 0" :rows="5" :columns="6" />
+    <TableSkeleton v-if="loading.logs && logs.length === 0" :rows="5" :columns="4" />
     <div v-else class="data-table-wrapper">
       <el-table :data="logs" border stripe empty-text="暂无日志" v-loading="loading.logs">
         <el-table-column label="时间" min-width="170" sortable>
@@ -60,19 +60,8 @@ async function loadMeLogs() {
             <span>{{ scope.row.task_type || "-" }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="event_type" label="事件" width="150" sortable>
-          <template #default="scope">
-            <el-tag :type="eventTypeTagType(scope.row.event_type)" size="small">{{ eventTypeLabel(scope.row.event_type) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="job_status" label="任务状态" width="130">
-          <template #default="scope">
-            <el-tag v-if="scope.row.job_status" :type="jobStatusTagType(scope.row.job_status)" size="small">{{ jobStatusLabel(scope.row.job_status) }}</el-tag>
-            <span v-else class="muted">-</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="error_code" label="错误原因" width="150">
-          <template #default="scope">{{ errorCodeLabel(scope.row.error_code) }}</template>
+        <el-table-column prop="leased_by_node" label="执行节点" width="160">
+          <template #default="scope">{{ scope.row.leased_by_node || "-" }}</template>
         </el-table-column>
         <el-table-column prop="message" label="说明" min-width="220" />
       </el-table>

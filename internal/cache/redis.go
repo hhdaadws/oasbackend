@@ -36,6 +36,21 @@ type Store interface {
 		slot string,
 		ttl time.Duration,
 	) (bool, error)
+	GetManagerExpiry(ctx context.Context, managerID uint) (time.Time, error)
+	SetManagerExpiry(ctx context.Context, managerID uint, expiresAt time.Time, ttl time.Duration) error
+	// Scan job methods
+	AcquireScanLease(ctx context.Context, scanJobID uint, nodeID string, ttl time.Duration) (bool, error)
+	RefreshScanLease(ctx context.Context, scanJobID uint, nodeID string, ttl time.Duration) (bool, error)
+	ReleaseScanLease(ctx context.Context, scanJobID uint, nodeID string) error
+	IsScanLeaseOwner(ctx context.Context, scanJobID uint, nodeID string) (bool, error)
+	ClearScanLease(ctx context.Context, scanJobID uint) error
+	SetScanCooldown(ctx context.Context, userID uint, count int, lastAt time.Time) error
+	GetScanCooldown(ctx context.Context, userID uint) (int, time.Time, error)
+	SetScanUserChoice(ctx context.Context, scanJobID uint, choiceType string, value string) error
+	GetScanUserChoice(ctx context.Context, scanJobID uint) (map[string]string, error)
+	ClearScanUserChoice(ctx context.Context, scanJobID uint) error
+	SetScanUserHeartbeat(ctx context.Context, scanJobID uint) error
+	IsScanUserOnline(ctx context.Context, scanJobID uint) (bool, error)
 }
 
 func NewRedisStore(cfg config.Config) (*RedisStore, error) {
@@ -240,4 +255,159 @@ func (r *RedisStore) AcquireScheduleSlot(
 		slot,
 	)
 	return r.client.SetNX(ctx, key, "1", ttl).Result()
+}
+
+func (r *RedisStore) GetManagerExpiry(ctx context.Context, managerID uint) (time.Time, error) {
+	key := r.key("manager", "expiry", strconv.FormatUint(uint64(managerID), 10))
+	val, err := r.client.Get(ctx, key).Result()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.RFC3339, val)
+}
+
+func (r *RedisStore) SetManagerExpiry(ctx context.Context, managerID uint, expiresAt time.Time, ttl time.Duration) error {
+	key := r.key("manager", "expiry", strconv.FormatUint(uint64(managerID), 10))
+	return r.client.Set(ctx, key, expiresAt.Format(time.RFC3339), ttl).Err()
+}
+
+// ── Scan job lease ──────────────────────────────────
+
+func (r *RedisStore) scanLeaseKey(scanJobID uint) string {
+	return r.key("scan", "lease", strconv.FormatUint(uint64(scanJobID), 10))
+}
+
+func (r *RedisStore) AcquireScanLease(ctx context.Context, scanJobID uint, nodeID string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	return r.client.SetNX(ctx, r.scanLeaseKey(scanJobID), nodeID, ttl).Result()
+}
+
+func (r *RedisStore) RefreshScanLease(ctx context.Context, scanJobID uint, nodeID string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	script := redis.NewScript(`
+local current = redis.call("GET", KEYS[1])
+if not current then
+  return 0
+end
+if current ~= ARGV[1] then
+  return 0
+end
+redis.call("PEXPIRE", KEYS[1], ARGV[2])
+return 1
+`)
+	res, err := script.Run(ctx, r.client, []string{r.scanLeaseKey(scanJobID)}, nodeID, ttl.Milliseconds()).Int()
+	if err != nil {
+		return false, err
+	}
+	return res == 1, nil
+}
+
+func (r *RedisStore) ReleaseScanLease(ctx context.Context, scanJobID uint, nodeID string) error {
+	script := redis.NewScript(`
+local current = redis.call("GET", KEYS[1])
+if not current then
+  return 1
+end
+if current ~= ARGV[1] then
+  return 0
+end
+redis.call("DEL", KEYS[1])
+return 1
+`)
+	res, err := script.Run(ctx, r.client, []string{r.scanLeaseKey(scanJobID)}, nodeID).Int()
+	if err != nil {
+		return err
+	}
+	if res == 0 {
+		return fmt.Errorf("scan lease owner mismatch")
+	}
+	return nil
+}
+
+func (r *RedisStore) IsScanLeaseOwner(ctx context.Context, scanJobID uint, nodeID string) (bool, error) {
+	value, err := r.client.Get(ctx, r.scanLeaseKey(scanJobID)).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return value == nodeID, nil
+}
+
+func (r *RedisStore) ClearScanLease(ctx context.Context, scanJobID uint) error {
+	return r.client.Del(ctx, r.scanLeaseKey(scanJobID)).Err()
+}
+
+// ── Scan cooldown ──────────────────────────────────
+
+func (r *RedisStore) SetScanCooldown(ctx context.Context, userID uint, count int, lastAt time.Time) error {
+	key := r.key("scan", "cooldown", strconv.FormatUint(uint64(userID), 10))
+	fields := map[string]any{
+		"count":   count,
+		"last_at": lastAt.UTC().Format(time.RFC3339),
+	}
+	pipe := r.client.TxPipeline()
+	pipe.HSet(ctx, key, fields)
+	pipe.Expire(ctx, key, 24*time.Hour)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (r *RedisStore) GetScanCooldown(ctx context.Context, userID uint) (int, time.Time, error) {
+	key := r.key("scan", "cooldown", strconv.FormatUint(uint64(userID), 10))
+	vals, err := r.client.HGetAll(ctx, key).Result()
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	if len(vals) == 0 {
+		return 0, time.Time{}, nil
+	}
+	count, _ := strconv.Atoi(vals["count"])
+	lastAt, _ := time.Parse(time.RFC3339, vals["last_at"])
+	return count, lastAt, nil
+}
+
+// ── Scan user choice ──────────────────────────────────
+
+func (r *RedisStore) SetScanUserChoice(ctx context.Context, scanJobID uint, choiceType string, value string) error {
+	key := r.key("scan", "user_choice", strconv.FormatUint(uint64(scanJobID), 10))
+	pipe := r.client.TxPipeline()
+	pipe.HSet(ctx, key, choiceType, value)
+	pipe.Expire(ctx, key, 10*time.Minute)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (r *RedisStore) GetScanUserChoice(ctx context.Context, scanJobID uint) (map[string]string, error) {
+	key := r.key("scan", "user_choice", strconv.FormatUint(uint64(scanJobID), 10))
+	return r.client.HGetAll(ctx, key).Result()
+}
+
+func (r *RedisStore) ClearScanUserChoice(ctx context.Context, scanJobID uint) error {
+	key := r.key("scan", "user_choice", strconv.FormatUint(uint64(scanJobID), 10))
+	return r.client.Del(ctx, key).Err()
+}
+
+// ── Scan user heartbeat ──────────────────────────────────
+
+func (r *RedisStore) SetScanUserHeartbeat(ctx context.Context, scanJobID uint) error {
+	key := r.key("scan", "user_heartbeat", strconv.FormatUint(uint64(scanJobID), 10))
+	return r.client.Set(ctx, key, time.Now().UTC().Format(time.RFC3339), 30*time.Second).Err()
+}
+
+func (r *RedisStore) IsScanUserOnline(ctx context.Context, scanJobID uint) (bool, error) {
+	key := r.key("scan", "user_heartbeat", strconv.FormatUint(uint64(scanJobID), 10))
+	_, err := r.client.Get(ctx, key).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

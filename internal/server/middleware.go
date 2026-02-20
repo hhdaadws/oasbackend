@@ -99,8 +99,10 @@ func (s *Server) requireUserToken() gin.HandlerFunc {
 			return
 		}
 
-		token.LastUsedAt = &now
-		_ = s.db.Model(&models.UserToken{}).Where("id = ?", token.ID).Update("last_used_at", now).Error
+		// Throttle last_used_at updates: only write if >5 minutes since last update
+		if token.LastUsedAt == nil || now.Sub(*token.LastUsedAt) > 5*time.Minute {
+			_ = s.db.Model(&models.UserToken{}).Where("id = ?", token.ID).Update("last_used_at", now).Error
+		}
 
 		c.Set(ctxActorRoleKey, models.ActorTypeUser)
 		c.Set(ctxActorIDKey, user.ID)
@@ -120,6 +122,20 @@ func (s *Server) requireManagerActive() gin.HandlerFunc {
 			return
 		}
 
+		now := time.Now().UTC()
+
+		// Try Redis cache first (avoids DB query on every request)
+		if expiresAt, err := s.redisStore.GetManagerExpiry(c.Request.Context(), managerID); err == nil {
+			if expiresAt.After(now) {
+				c.Next()
+				return
+			}
+			c.JSON(http.StatusForbidden, gin.H{"detail": "管理员账号已过期"})
+			c.Abort()
+			return
+		}
+
+		// Cache miss: query DB
 		var manager models.Manager
 		if err := s.db.Where("id = ?", managerID).First(&manager).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
@@ -132,12 +148,14 @@ func (s *Server) requireManagerActive() gin.HandlerFunc {
 			return
 		}
 
-		now := time.Now().UTC()
 		if manager.ExpiresAt == nil || !manager.ExpiresAt.After(now) {
 			c.JSON(http.StatusForbidden, gin.H{"detail": "管理员账号已过期"})
 			c.Abort()
 			return
 		}
+
+		// Cache manager expiry in Redis for 1 minute
+		_ = s.redisStore.SetManagerExpiry(c.Request.Context(), managerID, *manager.ExpiresAt, time.Minute)
 		c.Next()
 	}
 }

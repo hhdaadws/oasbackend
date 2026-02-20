@@ -14,7 +14,7 @@ const emit = defineEmits(["logout"]);
 const loading = reactive({ profile: false, saveProfile: false });
 
 const profile = reactive({
-  account_no: "", user_type: "daily", status: "", archive_status: "normal",
+  account_no: "", login_id: "", user_type: "daily", status: "", archive_status: "normal",
   expires_at: "", server: "", username: "", manager_id: "", manager_alias: "",
 });
 
@@ -54,6 +54,7 @@ async function loadMeProfile() {
   try {
     const response = await userApi.getMeProfile(props.token);
     profile.account_no = response.account_no || "";
+    profile.login_id = response.login_id || "";
     profile.user_type = response.user_type || "daily";
     profile.status = response.status || "";
     profile.archive_status = response.archive_status || "normal";
@@ -99,6 +100,10 @@ async function saveMeProfile() {
       </div>
     </div>
     <div class="stats-grid">
+      <div class="stat-item">
+        <span class="stat-label">登录ID</span>
+        <strong class="stat-value">{{ profile.login_id || "-" }}</strong>
+      </div>
       <div class="stat-item">
         <span class="stat-label">账号</span>
         <strong class="stat-value">{{ accountNo || "未记录" }}</strong>

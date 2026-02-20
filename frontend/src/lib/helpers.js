@@ -86,24 +86,21 @@ export function keyStatusLabel(status) {
 }
 
 export function jobStatusTagType(status) {
-  const map = { pending: "info", leased: "warning", running: "", success: "success", failed: "danger", timeout_requeued: "warning" };
+  const map = { pending: "info", leased: "info", running: "", success: "success", failed: "danger" };
   return map[status] || "info";
 }
 
 export function jobStatusLabel(status) {
-  const map = { pending: "待执行", leased: "已分配", running: "运行中", success: "成功", failed: "失败", timeout_requeued: "重新排队" };
+  const map = { pending: "等待中", leased: "等待中", running: "执行中", success: "执行成功", failed: "执行失败" };
   return map[status] || status || "-";
 }
 
 export function eventTypeLabel(eventType) {
   const map = {
-    generated: "任务生成",
-    leased: "已领取",
+    leased: "已获取",
     start: "开始执行",
-    heartbeat: "等待中",
     success: "执行成功",
     fail: "执行失败",
-    timeout_requeued: "超时重排",
   };
   return map[eventType] || eventType || "-";
 }
@@ -112,10 +109,7 @@ export function eventTypeTagType(eventType) {
   const map = {
     success: "success",
     fail: "danger",
-    generated: "primary",
     start: "",
-    timeout_requeued: "warning",
-    heartbeat: "info",
     leased: "info",
   };
   return map[eventType] || "info";

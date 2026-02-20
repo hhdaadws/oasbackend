@@ -161,7 +161,7 @@ Agent 登录（使用 Manager 凭据）。
 {
   "node_id": "LAPTOP-ABC-1234",
   "lease_seconds": 90,
-  "message": "queued local account 1"
+  "message": "已入队本地账号 1"
 }
 ```
 
@@ -178,7 +178,7 @@ Agent 登录（使用 Manager 凭据）。
 {
   "node_id": "LAPTOP-ABC-1234",
   "lease_seconds": 90,
-  "message": "local queue busy, keep lease"
+  "message": "本地队列繁忙，保持租约"
 }
 ```
 
@@ -231,6 +231,8 @@ Agent 登录（使用 Manager 凭据）。
 | `assets` | object | **仅成功时包含**，账号资产快照 |
 | `explore_progress` | object | **仅成功时包含**，探索进度 `{"章节号": bool}` |
 
+**通知行为：** 任务完成后，后端会异步检查该用户的 `notify_config`，若启用了微信通知（`wechat_enabled=true` 且 `wechat_miao_code` 非空），则通过喵提醒 API 向用户微信推送任务完成通知。
+
 ---
 
 ### 4.6 POST /api/v1/agent/jobs/:job_id/fail
@@ -241,7 +243,7 @@ Agent 登录（使用 Manager 凭据）。
 ```json
 {
   "node_id": "LAPTOP-ABC-1234",
-  "message": "local batch failed",
+  "message": "本地批次失败",
   "error_code": "LOCAL_BATCH_FAILED",
   "result": {
     "account_status": "invalid",
@@ -262,6 +264,8 @@ Agent 登录（使用 Manager 凭据）。
 | `LOCAL_ACCOUNT_MISSING` | 任务缺少账号标识 |
 | `TASK_TYPE_INVALID` | 不支持的任务类型 |
 | `LOCAL_EXEC_FAIL` | 通用执行错误 |
+
+**通知行为：** 任务失败后，后端同样会异步检查该用户的通知配置并推送失败通知（与 complete 接口行为一致）。
 
 ---
 
@@ -285,7 +289,13 @@ Agent 登录（使用 Manager 凭据）。
       "rest_duration": 3
     },
     "lineup_config": {
-      "formation_1": [1, 2, 3, 4, 5]
+      "逢魔": {"group": 1, "position": 3},
+      "地鬼": {"group": 2, "position": 1},
+      "探索": {"group": 0, "position": 0},
+      "结界突破": {"group": 0, "position": 0},
+      "道馆": {"group": 0, "position": 0},
+      "秘闻": {"group": 0, "position": 0},
+      "御魂": {"group": 3, "position": 2}
     },
     "shikigami_config": {},
     "explore_progress": {
@@ -348,13 +358,13 @@ Agent 登录（使用 Manager 凭据）。
     {
       "type": "signin",
       "level": "INFO",
-      "message": "batch completed: signin",
+      "message": "批次完成: signin",
       "ts": "2025-01-01T12:34:56.789000Z"
     },
     {
       "type": "explore",
       "level": "WARNING",
-      "message": "batch failed: explore",
+      "message": "批次失败: explore",
       "ts": "2025-01-01T12:35:10.123000Z"
     }
   ]
@@ -365,18 +375,170 @@ Agent 登录（使用 Manager 凭据）。
 
 ---
 
+## 4.5 扫码任务端点（Agent Scan API）
+
+> 以下端点用于 Oas2.0 ScanTaskPoller 轮询和执行扫码任务。认证方式同普通 Agent JWT。
+
+### 4.11 POST /api/v1/agent/scan/poll
+
+轮询待执行的扫码任务。FIFO 顺序分配，自动清理过期租约。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "limit": 1,
+  "lease_seconds": 120
+}
+```
+
+**响应：**
+```json
+{
+  "data": {
+    "jobs": [
+      {
+        "scan_job_id": 42,
+        "user_id": 5,
+        "login_id": "myaccount001",
+        "lease_until": "2026-02-20T12:02:00Z"
+      }
+    ],
+    "lease_until": "2026-02-20T12:02:00Z"
+  }
+}
+```
+
+**说明：** `login_id` 对应本地 `putonglogindata/{login_id}/` 目录，扫码完成后数据存储到此目录。
+
+---
+
+### 4.12 POST /api/v1/agent/scan/:scan_id/start
+
+报告扫码任务开始执行。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "lease_seconds": 120
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+### 4.13 POST /api/v1/agent/scan/:scan_id/phase
+
+更新扫码阶段并上传截图。自动刷新租约、清除上一阶段的用户选择缓存。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "phase": "qrcode_ready",
+  "screenshot": "<base64 PNG>",
+  "screenshot_key": "qrcode"
+}
+```
+
+**Phase 枚举：** `waiting` → `launching` → `qrcode_ready` → `choose_system` → `choose_zone` → `choose_role`（可选） → `entering` → `pulling_data` → `done`
+
+**说明：** `screenshot_key` 决定截图存储的键名（`qrcode` / `xuanqu` / `role`），前端根据此键获取对应截图。
+
+---
+
+### 4.14 GET /api/v1/agent/scan/:scan_id/choice
+
+轮询用户选择结果。同时返回任务取消状态和用户在线状态。
+
+**查询参数：** `?node_id=LAPTOP-ABC-1234`（必选）
+
+**响应：**
+```json
+{
+  "data": {
+    "has_choice": true,
+    "choice_type": "system",
+    "value": "ios",
+    "cancelled": false,
+    "user_online": true
+  }
+}
+```
+
+**Agent 使用模式：** 轮询此接口（每2秒），当 `has_choice=true` 且 `choice_type` 匹配当前等待类型时，读取 `value`。当 `cancelled=true` 或 `user_online=false` 时应中止任务。
+
+---
+
+### 4.15 POST /api/v1/agent/scan/:scan_id/heartbeat
+
+续约扫码任务租约。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "lease_seconds": 120
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+### 4.16 POST /api/v1/agent/scan/:scan_id/complete
+
+报告扫码任务完成。释放租约，通过 WebSocket 通知前端用户。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "message": "扫码完成: login_id=myaccount001"
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+### 4.17 POST /api/v1/agent/scan/:scan_id/fail
+
+报告扫码任务失败。如果 attempts < max_attempts (默认3)，自动重置为 pending 进行重试。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "message": "扫码超时",
+  "error_code": "EXECUTOR_ERROR"
+}
+```
+
+**error_code 枚举：**
+| error_code | 含义 |
+|-----------|------|
+| `CANCELLED` | 用户取消 |
+| `EXECUTOR_ERROR` | 执行器通用错误 |
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
 ## 5. 公共端点（无认证）
 
 ### GET /health
 
-健康检查。
+健康检查（含 Redis 和数据库连通性检测）。
 
 **响应：**
 ```json
 // 正常
-{"status": "ok", "redis": "up"}
-// Redis 不可用
-{"status": "degraded", "redis": "down"}  // HTTP 503
+{"status": "ok", "redis": "up", "db": "up"}
+// Redis 或数据库不可用
+{"status": "degraded", "redis": "up", "db": "down"}  // HTTP 503
 ```
 
 ---
@@ -503,3 +665,54 @@ pending → leased → running → success
 | `LOCAL_ACCOUNT_MISSING` | 任务缺少账号标识 |
 | `TASK_TYPE_INVALID` | 不支持的任务类型 |
 | `LOCAL_EXEC_FAIL` | 通用执行错误 |
+| `CANCELLED` | 扫码被用户取消 |
+| `EXECUTOR_ERROR` | 扫码执行器通用错误 |
+
+### ScanJob 状态流转
+
+```
+pending → leased → running → success
+                           → failed → (attempts < max ? pending : failed)
+                           → cancelled (用户取消 / 用户离开)
+                           → expired (总超时 15分钟)
+                   timeout → (attempts < max ? pending : expired)
+```
+
+**Phase 流转：**
+```
+waiting → launching → qrcode_ready → choose_system → choose_zone
+   → [choose_role] → entering → pulling_data → done
+```
+
+### 扫码协同流程
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   用户前端    │     │  oasbackend  │     │   Oas2.0     │
+└──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+       │ POST /user/scan/create │                 │
+       │───────────────────────>│                 │
+       │                        │   POST /agent/scan/poll
+       │                        │<────────────────│
+       │                        │   返回 ScanJob   │
+       │                        │────────────────>│
+       │                        │   POST /scan/:id/start
+       │  WS: phase=launching   │<────────────────│
+       │<───────────────────────│                 │
+       │                        │   POST /scan/:id/phase
+       │  WS: qrcode截图        │   {qrcode_ready, screenshot}
+       │<───────────────────────│<────────────────│
+       │                        │                 │
+       │  用户手机扫码           │                 │ 检测二维码消失
+       │                        │   POST /scan/:id/phase
+       │  WS: choose_system     │   {choose_system}
+       │<───────────────────────│<────────────────│
+       │                        │                 │ GET /scan/:id/choice (轮询)
+       │ POST /user/scan/choice │                 │
+       │ {type:system,val:ios}  │                 │
+       │───────────────────────>│────────────────>│ has_choice=true
+       │                        │                 │ 后续交互同理...
+       │                        │   POST /scan/:id/complete
+       │  WS: completed         │<────────────────│
+       │<───────────────────────│                 │
+```

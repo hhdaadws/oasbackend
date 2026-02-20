@@ -4,7 +4,7 @@
       <div class="panel-headline">
         <h3>用户 {{ selectedUserId }}（{{ selectedUserAccountNo }}）执行日志</h3>
         <div class="row-actions">
-          <el-input v-model="keyword" placeholder="按任务类型或事件类型搜索" clearable class="w-220" />
+          <el-input v-model="keyword" placeholder="按任务类型、节点或说明搜索" clearable class="w-220" />
           <el-button plain :loading="loading.logs" @click="loadLogs">刷新</el-button>
           <el-button type="danger" plain :loading="loading.clear" @click="clearLogs">清空日志</el-button>
         </div>
@@ -28,19 +28,8 @@
               <span>{{ scope.row.task_type || "-" }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="event_type" label="事件" width="150" sortable>
-            <template #default="scope">
-              <el-tag :type="eventTypeTagType(scope.row.event_type)" size="small">{{ eventTypeLabel(scope.row.event_type) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="job_status" label="任务状态" width="130">
-            <template #default="scope">
-              <el-tag v-if="scope.row.job_status" :type="jobStatusTagType(scope.row.job_status)" size="small">{{ jobStatusLabel(scope.row.job_status) }}</el-tag>
-              <span v-else class="muted">-</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="error_code" label="错误原因" width="150">
-            <template #default="scope">{{ errorCodeLabel(scope.row.error_code) }}</template>
+          <el-table-column prop="leased_by_node" label="执行节点" width="160">
+            <template #default="scope">{{ scope.row.leased_by_node || "-" }}</template>
           </el-table-column>
           <el-table-column prop="message" label="说明" min-width="220" />
         </el-table>
@@ -72,7 +61,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { managerApi, parseApiError } from "../../lib/http";
-import { formatTime, eventTypeLabel, eventTypeTagType, jobStatusLabel, jobStatusTagType, errorCodeLabel } from "../../lib/helpers";
+import { formatTime } from "../../lib/helpers";
 import { usePagination } from "../../composables/usePagination";
 import TableSkeleton from "../shared/TableSkeleton.vue";
 
@@ -90,8 +79,9 @@ const filteredLogs = computed(() => {
   const q = keyword.value.toLowerCase();
   return logs.value.filter(
     (log) =>
-      (log.event_type || "").toLowerCase().includes(q) ||
-      (log.task_type || "").toLowerCase().includes(q),
+      (log.task_type || "").toLowerCase().includes(q) ||
+      (log.leased_by_node || "").toLowerCase().includes(q) ||
+      (log.message || "").toLowerCase().includes(q),
   );
 });
 

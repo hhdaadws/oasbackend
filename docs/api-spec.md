@@ -50,14 +50,14 @@ HTTP 状态码：`200` 成功，`201` 创建成功，`400` 参数错误，`401` 
 
 ### GET /health
 
-健康检查。
+健康检查（含 Redis 和数据库连通性检测）。
 
 **响应：**
 ```json
 // 正常
-{"status": "ok", "redis": "up"}
-// Redis 不可用
-{"status": "degraded", "redis": "down"}  // HTTP 503
+{"status": "ok", "redis": "up", "db": "up"}
+// Redis 或数据库不可用
+{"status": "degraded", "redis": "up", "db": "down"}  // HTTP 503
 ```
 
 ---
@@ -819,12 +819,43 @@ Manager 使用续费密钥续期。
 
 ### GET /api/v1/manager/users/:user_id/logs *
 
-获取用户审计日志（分页）。
+获取用户执行日志（分页）。自动过滤 `timeout_requeued`、`heartbeat` 和 `leased` 事件，仅返回 `start`、`success`、`fail` 三种事件类型。
+按时间倒序排列（`event_at DESC`）。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `page` | int | 页码 |
 | `page_size` | int | 每页条数 |
+
+**响应 200：**
+```json
+{
+  "items": [
+    {
+      "job_id": 1,
+      "task_type": "signin",
+      "event_type": "start",
+      "message": "开始执行",
+      "error_code": "",
+      "event_at": "2025-01-01T12:00:00Z",
+      "leased_by_node": "LAPTOP-ABC-1234"
+    }
+  ],
+  "total": 100,
+  "page": 1,
+  "page_size": 50
+}
+```
+
+**`message` 字段说明：** 服务端根据事件类型生成中文描述，兼容历史数据：
+
+| event_type | message 示例 |
+|-----------|-------------|
+| `start` | "开始执行" |
+| `success` | "执行成功" |
+| `fail` | "执行失败：本地执行失败" |
+
+**`leased_by_node`** — 执行该任务的节点标识。
 
 ---
 
@@ -971,6 +1002,12 @@ Manager 使用续费密钥续期。
     "server": "不知火服",
     "username": "游戏昵称",
     "expires_at": "2025-12-31T23:59:59Z",
+    "notify_config": {
+      "email_enabled": false,
+      "email": "",
+      "wechat_enabled": true,
+      "wechat_miao_code": "tDS0Se9"
+    },
     "created_at": "2025-01-01T00:00:00Z"
   }
 }
@@ -985,10 +1022,31 @@ Manager 使用续费密钥续期。
 **请求：**
 ```json
 {
-  "server": "不知火服",     // 可选
-  "username": "游戏昵称"    // 可选
+  "server": "不知火服",          // 可选
+  "username": "游戏昵称",        // 可选
+  "notify_config": {             // 可选
+    "email_enabled": false,
+    "email": "",
+    "wechat_enabled": true,
+    "wechat_miao_code": "tDS0Se9"
+  }
 }
 ```
+
+**notify_config 字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| email_enabled | bool | 是否启用邮件通知 |
+| email | string | 邮箱地址（最长 254 字符） |
+| wechat_enabled | bool | 是否启用微信通知（喵提醒） |
+| wechat_miao_code | string | 喵提醒的喵码（仅字母数字，最长 64 字符） |
+
+**验证规则：**
+- 启用邮件通知时，邮箱地址必须格式正确
+- 喵码仅允许字母和数字
+- 启用微信通知时，喵码不能为空
+- 提交 notify_config 时需包含所有字段（整体覆写）
 
 ---
 
@@ -1040,7 +1098,75 @@ Manager 使用续费密钥续期。
 
 ### GET /api/v1/user/me/logs
 
-获取用户审计日志（分页）。
+获取用户执行日志（分页）。自动过滤 `timeout_requeued`、`heartbeat` 和 `leased` 事件，仅返回 `start`、`success`、`fail` 三种事件类型。
+按时间倒序排列（`event_at DESC`）。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `page` | int | 页码 |
+| `page_size` | int | 每页条数 |
+
+响应格式同 `GET /api/v1/manager/users/:user_id/logs`。
+
+---
+
+### GET /api/v1/user/me/lineup
+
+获取用户阵容配置。返回所有 7 个支持阵容切换的任务的配置，未配置的任务默认 group=0, position=0（不切换阵容）。
+
+**认证：** `Bearer <user_token>`
+
+**响应 200：**
+```json
+{
+  "lineup_config": {
+    "逢魔": {"group": 1, "position": 3},
+    "地鬼": {"group": 2, "position": 1},
+    "探索": {"group": 0, "position": 0},
+    "结界突破": {"group": 0, "position": 0},
+    "道馆": {"group": 0, "position": 0},
+    "秘闻": {"group": 0, "position": 0},
+    "御魂": {"group": 3, "position": 2}
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| lineup_config | object | 阵容配置对象，key 为任务名 |
+| group | int | 分组编号，0 = 未配置（不切换），1-7 = 对应游戏内分组 |
+| position | int | 阵容编号，0 = 未配置（不切换），1-7 = 对应游戏内阵容预设 |
+
+**支持的任务：** 逢魔、地鬼、探索、结界突破、道馆、秘闻、御魂
+
+---
+
+### PUT /api/v1/user/me/lineup
+
+更新用户阵容配置（合并策略：仅覆盖提交的任务）。
+
+**认证：** `Bearer <user_token>`
+
+**请求体：**
+```json
+{
+  "lineup_config": {
+    "逢魔": {"group": 1, "position": 3},
+    "御魂": {"group": 3, "position": 2}
+  }
+}
+```
+
+**验证规则：**
+- 仅接受 7 个支持的任务名称
+- group 和 position 必须为 0-7 之间的整数
+- 未提交的任务保持原有配置不变
+
+**响应 200：** 返回合并后的完整阵容配置（格式同 GET）。
+
+**错误响应：**
+- `400` — 不支持的任务类型 / group/position 值超出范围
+- `404` — 用户不存在
 
 ---
 
@@ -1257,7 +1383,13 @@ Agent 登录（使用 Manager 凭据）。
       "rest_duration": 3
     },
     "lineup_config": {
-      "formation_1": [1, 2, 3, 4, 5]
+      "逢魔": {"group": 1, "position": 3},
+      "地鬼": {"group": 2, "position": 1},
+      "探索": {"group": 0, "position": 0},
+      "结界突破": {"group": 0, "position": 0},
+      "道馆": {"group": 0, "position": 0},
+      "秘闻": {"group": 0, "position": 0},
+      "御魂": {"group": 3, "position": 2}
     },
     "shikigami_config": {},
     "explore_progress": {
@@ -1334,6 +1466,289 @@ Agent 登录（使用 Manager 凭据）。
 ```
 
 **响应 200：** 空
+
+---
+
+### POST /api/v1/agent/scan/poll
+
+轮询待执行的扫码任务。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "limit": 1,                    // 可选，默认 1，最大 5
+  "lease_seconds": 120            // 可选，默认 120
+}
+```
+
+**响应：**
+```json
+{
+  "data": {
+    "jobs": [
+      {
+        "scan_job_id": 42,
+        "user_id": 5,
+        "login_id": "myaccount001",
+        "lease_until": "2026-02-20T12:02:00Z"
+      }
+    ],
+    "lease_until": "2026-02-20T12:02:00Z"
+  }
+}
+```
+
+**说明：** 自动清理过期租约的扫码任务，并将获取到的任务标记为 `leased`。FIFO 顺序。
+
+---
+
+### POST /api/v1/agent/scan/:scan_id/start
+
+报告扫码任务开始执行。将状态置为 `running`，phase 置为 `launching`。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "lease_seconds": 120
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+### POST /api/v1/agent/scan/:scan_id/phase
+
+更新扫码阶段并可附带截图。自动刷新租约，并清除上一阶段的用户选择缓存。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "phase": "qrcode_ready",
+  "screenshot": "<base64 PNG>",       // 可选
+  "screenshot_key": "qrcode"          // 截图存储键名，可选
+}
+```
+
+**Phase 枚举：** `waiting` → `launching` → `qrcode_ready` → `choose_system` → `choose_zone` → `choose_role`（可选） → `entering` → `pulling_data` → `done`
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+### GET /api/v1/agent/scan/:scan_id/choice
+
+轮询用户选择结果。同时返回任务取消状态和用户在线状态。
+
+**查询参数：** `?node_id=LAPTOP-ABC-1234`（必选）
+
+**响应：**
+```json
+{
+  "data": {
+    "has_choice": true,
+    "choice_type": "system",
+    "value": "ios",
+    "cancelled": false,
+    "user_online": true
+  }
+}
+```
+
+---
+
+### POST /api/v1/agent/scan/:scan_id/heartbeat
+
+续约扫码任务租约。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "lease_seconds": 120
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+### POST /api/v1/agent/scan/:scan_id/complete
+
+报告扫码任务执行成功。释放租约，通过 WebSocket 通知用户。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "message": "扫码完成: login_id=myaccount001"
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+### POST /api/v1/agent/scan/:scan_id/fail
+
+报告扫码任务失败。如果 attempts < max_attempts 则自动重置为 pending 进行重试。
+
+**请求：**
+```json
+{
+  "node_id": "LAPTOP-ABC-1234",
+  "message": "扫码超时",
+  "error_code": "EXECUTOR_ERROR"
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+## 6.5 User 扫码端点
+
+> 认证：User Token（Bearer）
+
+### POST /api/v1/user/scan/create
+
+创建扫码任务。包含阶梯式冷却检查和活跃任务检查。
+
+**请求：**
+```json
+{
+  "login_id": "myaccount001"  // 可选，不传则自动使用当前用户的 login_id
+}
+```
+
+**成功响应 201：**
+```json
+{
+  "data": {
+    "scan_job_id": 42,
+    "position_in_queue": 3
+  }
+}
+```
+
+**错误响应：**
+- `429` — 冷却中 `{"detail": "冷却中，请等待 X 秒后重试", "cooldown_remaining": 180}`
+- `409` — 已有进行中的扫码任务
+
+**冷却规则（阶梯式）：**
+| 第 N 次扫码 | 冷却时间 |
+|------------|---------|
+| 第 1 次 | 无冷却 |
+| 第 2 次 | 3 分钟 |
+| 第 3 次 | 10 分钟 |
+| 第 4 次 | 30 分钟 |
+| 第 5 次+ | 60 分钟 |
+
+24 小时无扫码自动重置计数。
+
+---
+
+### GET /api/v1/user/scan/status
+
+查询当前扫码任务状态。
+
+**响应（有活跃任务）：**
+```json
+{
+  "data": {
+    "active": true,
+    "scan_job_id": 42,
+    "status": "running",
+    "phase": "qrcode_ready",
+    "login_id": "myaccount001",
+    "screenshots": { "qrcode": "<base64>" },
+    "position_in_queue": 0,
+    "error_message": "",
+    "created_at": "2026-02-20T12:00:00Z"
+  }
+}
+```
+
+**响应（无活跃任务）：**
+```json
+{
+  "data": {
+    "active": false,
+    "cooldown_remaining": 120
+  }
+}
+```
+
+---
+
+### POST /api/v1/user/scan/choice
+
+提交用户选择（系统/区/角色）。
+
+**请求：**
+```json
+{
+  "scan_job_id": 42,
+  "choice_type": "system",     // system | zone | role
+  "value": "ios"               // 选择值
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+**校验：** choice_type 必须匹配当前 phase（如 `choose_system` 阶段只接受 `system` 类型）
+
+---
+
+### POST /api/v1/user/scan/cancel
+
+取消扫码任务。
+
+**请求：**
+```json
+{
+  "scan_job_id": 42
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+---
+
+### POST /api/v1/user/scan/heartbeat
+
+用户心跳（标记用户还在扫码页面）。
+
+**请求：**
+```json
+{
+  "scan_job_id": 42
+}
+```
+
+**响应 200：** `{"data": {"message": "ok"}}`
+
+**说明：** 60 秒无心跳，后台超时检测会自动取消任务。
+
+---
+
+### GET /api/v1/user/scan/ws
+
+WebSocket 连接，实时推送扫码状态变更。
+
+**查询参数：** `?token=<user_token>`
+
+**推送消息格式：**
+```json
+{"type": "phase", "phase": "qrcode_ready", "screenshot": "<base64>"}
+{"type": "phase", "phase": "choose_system"}
+{"type": "completed", "phase": "done", "message": "扫码完成"}
+{"type": "failed", "message": "超时"}
+{"type": "cancelled", "message": "用户取消扫码"}
+```
 
 ---
 
@@ -1446,4 +1861,20 @@ Agent 登录（使用 Manager 凭据）。
 pending → leased → running → success
                            → failed → (重试) pending
                    timeout → timeout_requeued → pending
+```
+
+### ScanJob 状态流转
+
+```
+pending → leased → running → success
+                           → failed → (attempts < max ? pending : failed)
+                           → cancelled (用户取消 / 用户离开)
+                           → expired (总超时 15分钟)
+                   timeout → (attempts < max ? pending : expired)
+```
+
+**Phase 流转：**
+```
+waiting → launching → qrcode_ready → choose_system → choose_zone
+   → [choose_role] → entering → pulling_data → done
 ```

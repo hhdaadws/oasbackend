@@ -20,6 +20,14 @@ func main() {
 		log.Fatalf("failed to connect database: %v", err)
 	}
 
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatalf("failed to get underlying sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.DBMaxIdleConns)
+	sqlDB.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
+
 	if err := models.AutoMigrate(db); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}

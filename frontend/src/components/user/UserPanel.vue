@@ -6,6 +6,7 @@ import AssetsTab from "./AssetsTab.vue";
 import TasksTab from "./TasksTab.vue";
 import UserLogsTab from "./UserLogsTab.vue";
 import NotifyTab from "./NotifyTab.vue";
+import ScanTab from "./ScanTab.vue";
 
 const props = defineProps({
   token: { type: String, default: "" },
@@ -46,6 +47,9 @@ const activeTab = ref("account");
         </el-tab-pane>
         <el-tab-pane label="通知管理" name="notify">
           <NotifyTab :token="token" />
+        </el-tab-pane>
+        <el-tab-pane label="自助扫码" name="scan">
+          <ScanTab :token="token" />
         </el-tab-pane>
       </el-tabs>
     </template>

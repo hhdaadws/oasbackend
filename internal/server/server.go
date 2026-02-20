@@ -5,22 +5,27 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/mail"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"oas-cloud-go/internal/auth"
 	"oas-cloud-go/internal/cache"
 	"oas-cloud-go/internal/config"
 	"oas-cloud-go/internal/models"
+	"oas-cloud-go/internal/notify"
 	"oas-cloud-go/internal/scheduler"
 	"oas-cloud-go/internal/taskmeta"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -37,6 +42,10 @@ type Server struct {
 	generator    *scheduler.Generator
 	tokenManager *auth.TokenManager
 	router       *gin.Engine
+	auditCh      chan models.AuditLog
+	notifyCh     chan notify.NotifyRequest
+	notifier     *notify.Notifier
+	scanWSHub    *ScanWSHub
 }
 
 var errInvalidTaskConfigPatch = errors.New("invalid task config patch")
@@ -48,30 +57,97 @@ func New(cfg config.Config, db *gorm.DB, redisStore cache.Store) *Server {
 		redisStore:   redisStore,
 		tokenManager: auth.NewTokenManager(cfg.JWTSecret),
 		router:       gin.New(),
+		auditCh:      make(chan models.AuditLog, 256),
+		notifyCh:     make(chan notify.NotifyRequest, 256),
+		notifier:     notify.NewNotifier(),
+		scanWSHub:    newScanWSHub(),
 	}
 	if cfg.SchedulerEnabled {
 		app.generator = scheduler.NewGenerator(cfg, db, redisStore)
 		app.generator.Start()
 	}
-	app.router.Use(gin.Logger(), gin.Recovery())
+	go app.auditWorker()
+	go app.notifyWorker()
+	go app.scanJobTimeoutWorker()
+	app.router.Use(gin.Logger(), gin.Recovery(), gzip.Gzip(gzip.DefaultCompression))
 	app.mountRoutes()
 	return app
 }
 
 func (s *Server) Run() error {
-	return s.router.Run(s.cfg.Addr)
+	srv := &http.Server{
+		Addr:         s.cfg.Addr,
+		Handler:      s.router,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("server listening on %s", s.cfg.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("server error: %w", err)
+	case sig := <-quit:
+		log.Printf("received signal %v, shutting down gracefully...", sig)
+	}
+
+	if s.generator != nil {
+		s.generator.Stop()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		return fmt.Errorf("server forced to shutdown: %w", err)
+	}
+	log.Println("server exited gracefully")
+	return nil
 }
 
 func (s *Server) mountRoutes() {
 	s.router.GET("/health", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()
+
+		status := gin.H{"status": "ok"}
+		httpStatus := http.StatusOK
+
+		// Check Redis
 		redisErr := s.redisStore.Ping(ctx)
 		if redisErr != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded", "redis": "down"})
-			return
+			status["redis"] = "down"
+			status["status"] = "degraded"
+			httpStatus = http.StatusServiceUnavailable
+		} else {
+			status["redis"] = "up"
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "redis": "up"})
+
+		// Check DB
+		sqlDB, dbErr := s.db.DB()
+		if dbErr != nil {
+			status["db"] = "down"
+			status["status"] = "degraded"
+			httpStatus = http.StatusServiceUnavailable
+		} else if err := sqlDB.PingContext(ctx); err != nil {
+			status["db"] = "down"
+			status["status"] = "degraded"
+			httpStatus = http.StatusServiceUnavailable
+		} else {
+			status["db"] = "up"
+		}
+
+		c.JSON(httpStatus, status)
 	})
 	s.router.GET("/super/console", s.superConsole)
 
@@ -150,7 +226,16 @@ func (s *Server) mountRoutes() {
 		userGroup.GET("/me/tasks", s.userGetMeTasks)
 		userGroup.PUT("/me/tasks", s.userPutMeTasks)
 		userGroup.GET("/me/logs", s.userGetMeLogs)
+		userGroup.GET("/me/lineup", s.userGetMeLineup)
+		userGroup.PUT("/me/lineup", s.userPutMeLineup)
+		userGroup.POST("/scan/create", s.userScanCreate)
+		userGroup.GET("/scan/status", s.userScanStatus)
+		userGroup.POST("/scan/choice", s.userScanChoice)
+		userGroup.POST("/scan/cancel", s.userScanCancel)
+		userGroup.POST("/scan/heartbeat", s.userScanHeartbeat)
 	}
+	// WebSocket endpoint (no middleware — token validated inside handler)
+	api.GET("/user/scan/ws", s.userScanWS)
 
 	agentGroup := api.Group("/agent")
 	agentGroup.Use(s.requireJWT(models.ActorTypeAgent))
@@ -164,6 +249,13 @@ func (s *Server) mountRoutes() {
 		agentGroup.PATCH("/users/:user_id/game-profile", s.agentUpdateUserGameProfile)
 		agentGroup.PUT("/users/:user_id/explore-progress", s.agentUpdateExploreProgress)
 		agentGroup.POST("/users/:user_id/logs", s.agentReportLogs)
+		agentGroup.POST("/scan/poll", s.agentScanPoll)
+		agentGroup.POST("/scan/:scan_id/start", s.agentScanStart)
+		agentGroup.POST("/scan/:scan_id/phase", s.agentScanPhase)
+		agentGroup.GET("/scan/:scan_id/choice", s.agentScanGetChoice)
+		agentGroup.POST("/scan/:scan_id/heartbeat", s.agentScanHeartbeat)
+		agentGroup.POST("/scan/:scan_id/complete", s.agentScanComplete)
+		agentGroup.POST("/scan/:scan_id/fail", s.agentScanFail)
 	}
 
 	s.mountFrontendRoutes()
@@ -451,14 +543,24 @@ func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
 	}
 
 	items := make([]gin.H, 0, len(keys))
-	var totalCount int64
-	var unusedCount int64
-	var usedCount int64
-	var revokedCount int64
-	_ = s.db.Model(&models.ManagerRenewalKey{}).Count(&totalCount).Error
-	_ = s.db.Model(&models.ManagerRenewalKey{}).Where("status = ?", models.CodeStatusUnused).Count(&unusedCount).Error
-	_ = s.db.Model(&models.ManagerRenewalKey{}).Where("status = ?", models.CodeStatusUsed).Count(&usedCount).Error
-	_ = s.db.Model(&models.ManagerRenewalKey{}).Where("status = ?", models.CodeStatusRevoked).Count(&revokedCount).Error
+	var totalCount, unusedCount, usedCount, revokedCount int64
+	type statusAgg struct {
+		Status string `gorm:"column:status"`
+		Cnt    int64  `gorm:"column:cnt"`
+	}
+	var aggResults []statusAgg
+	s.db.Model(&models.ManagerRenewalKey{}).Select("status, COUNT(*) as cnt").Group("status").Find(&aggResults)
+	for _, r := range aggResults {
+		totalCount += r.Cnt
+		switch r.Status {
+		case models.CodeStatusUnused:
+			unusedCount = r.Cnt
+		case models.CodeStatusUsed:
+			usedCount = r.Cnt
+		case models.CodeStatusRevoked:
+			revokedCount = r.Cnt
+		}
+	}
 	for _, key := range keys {
 		var usedByManagerID any
 		var usedByManagerUsername any
@@ -517,14 +619,23 @@ func (s *Server) superListManagers(c *gin.Context) {
 	now := time.Now().UTC()
 	expiringThreshold := now.Add(7 * 24 * time.Hour)
 
-	// Summary counts over full dataset (not paginated)
-	var totalAll int64
-	_ = s.db.Model(&models.Manager{}).Count(&totalAll).Error
-	var activeAll int64
-	_ = s.db.Model(&models.Manager{}).Where("expires_at IS NOT NULL AND expires_at > ?", now).Count(&activeAll).Error
+	// Summary counts using single query with conditional aggregation
+	type managerSummary struct {
+		TotalAll     int64 `gorm:"column:total_all"`
+		ActiveAll    int64 `gorm:"column:active_all"`
+		Expiring7d   int64 `gorm:"column:expiring_7d"`
+	}
+	var ms managerSummary
+	s.db.Model(&models.Manager{}).Select(
+		"COUNT(*) as total_all, "+
+			"SUM(CASE WHEN expires_at IS NOT NULL AND expires_at > ? THEN 1 ELSE 0 END) as active_all, "+
+			"SUM(CASE WHEN expires_at IS NOT NULL AND expires_at > ? AND expires_at < ? THEN 1 ELSE 0 END) as expiring_7d",
+		now, now, expiringThreshold,
+	).Scan(&ms)
+	totalAll := ms.TotalAll
+	activeAll := ms.ActiveAll
 	expiredAll := totalAll - activeAll
-	var expiring7dAll int64
-	_ = s.db.Model(&models.Manager{}).Where("expires_at IS NOT NULL AND expires_at > ? AND expires_at < ?", now, expiringThreshold).Count(&expiring7dAll).Error
+	expiring7dAll := ms.Expiring7d
 
 	// Per-manager user statistics
 	type managerUserStats struct {
@@ -765,6 +876,19 @@ func (s *Server) superBatchManagerLifecycle(c *gin.Context) {
 		if len(managers) != len(req.ManagerIDs) {
 			return fmt.Errorf("some manager IDs not found")
 		}
+
+		// Fast path: no ExtendDays, all managers get same updates → single bulk UPDATE
+		if req.ExtendDays == 0 && hasExpires {
+			updates := map[string]any{"updated_at": now, "expires_at": parsedExpires}
+			result := tx.Model(&models.Manager{}).Where("id IN ?", req.ManagerIDs).Updates(updates)
+			if result.Error != nil {
+				return result.Error
+			}
+			updated = result.RowsAffected
+			return nil
+		}
+
+		// Slow path: ExtendDays > 0, each manager has different expires_at
 		for _, manager := range managers {
 			updates := map[string]any{"updated_at": now}
 			if hasExpires {
@@ -1052,14 +1176,24 @@ func (s *Server) managerListActivationCodes(c *gin.Context) {
 		}
 	}
 
-	var totalCount int64
-	var unusedCount int64
-	var usedCount int64
-	var revokedCount int64
-	_ = s.db.Model(&models.UserActivationCode{}).Where("manager_id = ?", managerID).Count(&totalCount).Error
-	_ = s.db.Model(&models.UserActivationCode{}).Where("manager_id = ? AND status = ?", managerID, models.CodeStatusUnused).Count(&unusedCount).Error
-	_ = s.db.Model(&models.UserActivationCode{}).Where("manager_id = ? AND status = ?", managerID, models.CodeStatusUsed).Count(&usedCount).Error
-	_ = s.db.Model(&models.UserActivationCode{}).Where("manager_id = ? AND status = ?", managerID, models.CodeStatusRevoked).Count(&revokedCount).Error
+	var totalCount, unusedCount, usedCount, revokedCount int64
+	type codeStatusAgg struct {
+		Status string `gorm:"column:status"`
+		Cnt    int64  `gorm:"column:cnt"`
+	}
+	var codeAggResults []codeStatusAgg
+	s.db.Model(&models.UserActivationCode{}).Select("status, COUNT(*) as cnt").Where("manager_id = ?", managerID).Group("status").Find(&codeAggResults)
+	for _, r := range codeAggResults {
+		totalCount += r.Cnt
+		switch r.Status {
+		case models.CodeStatusUnused:
+			unusedCount = r.Cnt
+		case models.CodeStatusUsed:
+			usedCount = r.Cnt
+		case models.CodeStatusRevoked:
+			revokedCount = r.Cnt
+		}
+	}
 
 	items := make([]gin.H, 0, len(codes))
 	for _, code := range codes {
@@ -1233,17 +1367,42 @@ func (s *Server) managerListUsers(c *gin.Context) {
 
 	now := time.Now().UTC()
 
-	// Summary counts over full dataset (not paginated)
+	// Summary counts using GROUP BY (replaces 7 individual COUNT queries)
 	var totalAll, activeAll, expiredAll, disabledAll int64
-	mgBase := s.db.Model(&models.User{}).Where("manager_id = ?", managerID)
-	_ = mgBase.Count(&totalAll).Error
-	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, models.UserStatusActive).Count(&activeAll).Error
-	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, models.UserStatusExpired).Count(&expiredAll).Error
-	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, models.UserStatusDisabled).Count(&disabledAll).Error
+	type userStatusAgg struct {
+		Status string `gorm:"column:status"`
+		Cnt    int64  `gorm:"column:cnt"`
+	}
+	var statusAggs []userStatusAgg
+	s.db.Model(&models.User{}).Select("status, COUNT(*) as cnt").Where("manager_id = ?", managerID).Group("status").Find(&statusAggs)
+	for _, r := range statusAggs {
+		totalAll += r.Cnt
+		switch r.Status {
+		case models.UserStatusActive:
+			activeAll = r.Cnt
+		case models.UserStatusExpired:
+			expiredAll = r.Cnt
+		case models.UserStatusDisabled:
+			disabledAll = r.Cnt
+		}
+	}
 	var dailyAll, duiyiAll, shuakaAll int64
-	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND user_type = ?", managerID, models.UserTypeDaily).Count(&dailyAll).Error
-	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND user_type = ?", managerID, models.UserTypeDuiyi).Count(&duiyiAll).Error
-	_ = s.db.Model(&models.User{}).Where("manager_id = ? AND user_type = ?", managerID, models.UserTypeShuaka).Count(&shuakaAll).Error
+	type userTypeAgg struct {
+		UserType string `gorm:"column:user_type"`
+		Cnt      int64  `gorm:"column:cnt"`
+	}
+	var typeAggs []userTypeAgg
+	s.db.Model(&models.User{}).Select("user_type, COUNT(*) as cnt").Where("manager_id = ?", managerID).Group("user_type").Find(&typeAggs)
+	for _, r := range typeAggs {
+		switch r.UserType {
+		case models.UserTypeDaily:
+			dailyAll = r.Cnt
+		case models.UserTypeDuiyi:
+			duiyiAll = r.Cnt
+		case models.UserTypeShuaka:
+			shuakaAll = r.Cnt
+		}
+	}
 
 	items := make([]gin.H, 0, len(users))
 	for _, user := range users {
@@ -1300,27 +1459,31 @@ func (s *Server) managerOverview(c *gin.Context) {
 		"failed":  int64(0),
 	}
 
-	userStatusTargets := []string{models.UserStatusActive, models.UserStatusExpired}
+	// User stats via GROUP BY (replaces 2 individual COUNT queries)
+	type overviewAgg struct {
+		Status string `gorm:"column:status"`
+		Cnt    int64  `gorm:"column:cnt"`
+	}
+	var userAggs []overviewAgg
+	if err := s.db.Model(&models.User{}).Select("status, COUNT(*) as cnt").Where("manager_id = ?", managerID).Group("status").Find(&userAggs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询用户概览失败"})
+		return
+	}
 	var totalUsers int64
-	for _, status := range userStatusTargets {
-		var count int64
-		if err := s.db.Model(&models.User{}).Where("manager_id = ? AND status = ?", managerID, status).Count(&count).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询用户概览失败"})
-			return
-		}
-		userStats[status] = count
-		totalUsers += count
+	for _, r := range userAggs {
+		userStats[r.Status] = r.Cnt
+		totalUsers += r.Cnt
 	}
 	userStats["total"] = totalUsers
 
-	jobStatusTargets := []string{models.JobStatusPending, models.JobStatusLeased, models.JobStatusRunning, models.JobStatusSuccess, models.JobStatusFailed}
-	for _, status := range jobStatusTargets {
-		var count int64
-		if err := s.db.Model(&models.TaskJob{}).Where("manager_id = ? AND status = ?", managerID, status).Count(&count).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询任务概览失败"})
-			return
-		}
-		jobStats[status] = count
+	// Job stats via GROUP BY (replaces 5 individual COUNT queries)
+	var jobAggs []overviewAgg
+	if err := s.db.Model(&models.TaskJob{}).Select("status, COUNT(*) as cnt").Where("manager_id = ?", managerID).Group("status").Find(&jobAggs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询任务概览失败"})
+		return
+	}
+	for _, r := range jobAggs {
+		jobStats[r.Status] = r.Cnt
 	}
 
 	var recentFailures int64
@@ -1396,11 +1559,14 @@ func (s *Server) managerListTaskPool(c *gin.Context) {
 	}
 
 	summary := gin.H{"pending": int64(0), "leased": int64(0), "running": int64(0)}
-	for _, st := range activeStatuses {
-		var count int64
-		if err := s.db.Model(&models.TaskJob{}).Where("manager_id = ? AND status = ?", managerID, st).Count(&count).Error; err == nil {
-			summary[st] = count
-		}
+	type poolSummaryAgg struct {
+		Status string `gorm:"column:status"`
+		Cnt    int64  `gorm:"column:cnt"`
+	}
+	var poolAggs []poolSummaryAgg
+	s.db.Model(&models.TaskJob{}).Select("status, COUNT(*) as cnt").Where("manager_id = ? AND status IN ?", managerID, activeStatuses).Group("status").Find(&poolAggs)
+	for _, r := range poolAggs {
+		summary[r.Status] = r.Cnt
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1800,27 +1966,45 @@ func (s *Server) managerBatchUserLifecycle(c *gin.Context) {
 		if len(users) != len(req.UserIDs) {
 			return fmt.Errorf("some user IDs not found or not owned by this manager")
 		}
-		for _, user := range users {
+
+		// Fast path: when ExtendDays is 0, all users get the same updates → single bulk UPDATE
+		if req.ExtendDays == 0 {
 			updates := map[string]any{"updated_at": now}
-			hasExpiryUpdate := false
 			if hasExpires {
 				updates["expires_at"] = parsedExpires
-				hasExpiryUpdate = true
-			}
-			if req.ExtendDays > 0 {
-				newExpire := extendExpiry(user.ExpiresAt, req.ExtendDays, now)
-				updates["expires_at"] = newExpire
-				hasExpiryUpdate = true
 			}
 			if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
 				updates["status"] = rawStatus
-			} else if hasExpiryUpdate {
-				if expireTime, ok := updates["expires_at"].(time.Time); ok {
-					if expireTime.After(now) {
-						updates["status"] = models.UserStatusActive
-					} else {
-						updates["status"] = models.UserStatusExpired
-					}
+			} else if hasExpires {
+				if parsedExpires.After(now) {
+					updates["status"] = models.UserStatusActive
+				} else {
+					updates["status"] = models.UserStatusExpired
+				}
+			}
+			result := tx.Model(&models.User{}).Where("id IN ? AND manager_id = ?", req.UserIDs, managerID).Updates(updates)
+			if result.Error != nil {
+				return result.Error
+			}
+			updated = result.RowsAffected
+			return nil
+		}
+
+		// Slow path: ExtendDays > 0, each user has different expires_at based on current value
+		for _, user := range users {
+			updates := map[string]any{"updated_at": now}
+			if hasExpires {
+				updates["expires_at"] = parsedExpires
+			}
+			newExpire := extendExpiry(user.ExpiresAt, req.ExtendDays, now)
+			updates["expires_at"] = newExpire
+			if rawStatus := strings.TrimSpace(req.Status); rawStatus != "" {
+				updates["status"] = rawStatus
+			} else {
+				if newExpire.After(now) {
+					updates["status"] = models.UserStatusActive
+				} else {
+					updates["status"] = models.UserStatusExpired
 				}
 			}
 			if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
@@ -2225,9 +2409,31 @@ func (s *Server) userPutMeProfile(c *gin.Context) {
 				return
 			}
 		}
+
+		wechatEnabled, _ := nc["wechat_enabled"].(bool)
+		wechatMiaoCode, _ := nc["wechat_miao_code"].(string)
+		wechatMiaoCode = strings.TrimSpace(wechatMiaoCode)
+		if len(wechatMiaoCode) > 64 {
+			wechatMiaoCode = wechatMiaoCode[:64]
+		}
+		if wechatMiaoCode != "" {
+			for _, r := range wechatMiaoCode {
+				if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+					c.JSON(http.StatusBadRequest, gin.H{"detail": "喵码只能包含字母和数字"})
+					return
+				}
+			}
+		}
+		if wechatEnabled && wechatMiaoCode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "启用微信通知需要填写喵码"})
+			return
+		}
+
 		updates["notify_config"] = datatypes.JSONMap{
-			"email_enabled": emailEnabled,
-			"email":         email,
+			"email_enabled":    emailEnabled,
+			"email":            email,
+			"wechat_enabled":   wechatEnabled,
+			"wechat_miao_code": wechatMiaoCode,
 		}
 	}
 	if len(updates) == 0 {
@@ -2348,6 +2554,131 @@ func (s *Server) userGetMeLogs(c *gin.Context) {
 	})
 }
 
+// 支持阵容切换的任务列表
+var lineupSupportedTasks = []string{"逢魔", "地鬼", "探索", "结界突破", "道馆", "秘闻", "御魂"}
+
+func defaultLineupConfig() map[string]any {
+	result := map[string]any{}
+	for _, task := range lineupSupportedTasks {
+		result[task] = map[string]any{"group": float64(0), "position": float64(0)}
+	}
+	return result
+}
+
+func mergeLineupWithDefaults(userConfig map[string]any) map[string]any {
+	result := defaultLineupConfig()
+	if userConfig == nil {
+		return result
+	}
+	for _, task := range lineupSupportedTasks {
+		if val, ok := userConfig[task]; ok {
+			if valMap, ok2 := val.(map[string]any); ok2 {
+				merged := result[task].(map[string]any)
+				if g, ok3 := valMap["group"]; ok3 {
+					merged["group"] = g
+				}
+				if p, ok3 := valMap["position"]; ok3 {
+					merged["position"] = p
+				}
+				result[task] = merged
+			}
+		}
+	}
+	return result
+}
+
+func toIntLineup(v any) (int, error) {
+	switch val := v.(type) {
+	case float64:
+		return int(val), nil
+	case int:
+		return val, nil
+	case int64:
+		return int(val), nil
+	default:
+		return 0, fmt.Errorf("not a number")
+	}
+}
+
+func (s *Server) userGetMeLineup(c *gin.Context) {
+	userID := getUint(c, ctxUserIDKey)
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
+		return
+	}
+	merged := mergeLineupWithDefaults(map[string]any(user.LineupConfig))
+	c.JSON(http.StatusOK, gin.H{"lineup_config": merged})
+}
+
+func (s *Server) userPutMeLineup(c *gin.Context) {
+	userID := getUint(c, ctxUserIDKey)
+
+	var req struct {
+		LineupConfig map[string]any `json:"lineup_config" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	// 验证
+	validTasks := map[string]bool{}
+	for _, t := range lineupSupportedTasks {
+		validTasks[t] = true
+	}
+	for key, val := range req.LineupConfig {
+		if !validTasks[key] {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("不支持的任务类型: %s", key)})
+			return
+		}
+		valMap, ok := val.(map[string]any)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("任务 %s 的配置格式错误", key)})
+			return
+		}
+		groupVal, gOk := valMap["group"]
+		posVal, pOk := valMap["position"]
+		if !gOk || !pOk {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("任务 %s 缺少 group 或 position", key)})
+			return
+		}
+		groupNum, gErr := toIntLineup(groupVal)
+		posNum, pErr := toIntLineup(posVal)
+		if gErr != nil || pErr != nil || groupNum < 0 || groupNum > 7 || posNum < 0 || posNum > 7 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("任务 %s 的 group/position 必须为 0-7 之间的整数", key)})
+			return
+		}
+	}
+
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
+		return
+	}
+
+	current := map[string]any(user.LineupConfig)
+	if current == nil {
+		current = map[string]any{}
+	}
+	for key, val := range req.LineupConfig {
+		current[key] = val
+	}
+
+	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]any{
+		"lineup_config": datatypes.JSONMap(current),
+		"updated_at":    time.Now().UTC(),
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新阵容配置失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, userID, "user_update_lineup", "user", userID, datatypes.JSONMap(req.LineupConfig), c.ClientIP())
+
+	merged := mergeLineupWithDefaults(current)
+	c.JSON(http.StatusOK, gin.H{"lineup_config": merged})
+}
+
 func (s *Server) agentLogin(c *gin.Context) {
 	var req agentLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -2434,17 +2765,6 @@ func (s *Server) agentPollJobs(c *gin.Context) {
 				return err
 			}
 			for _, id := range expiredIDs {
-				event := models.TaskJobEvent{
-					JobID:     id,
-					EventType: models.JobStatusRequeued,
-					Message:   "lease timeout requeued",
-					EventAt:   now,
-				}
-				if err := tx.Create(&event).Error; err != nil {
-					return err
-				}
-			}
-			for _, id := range expiredIDs {
 				_ = s.redisStore.ClearJobLease(ctx, managerID, id)
 			}
 		}
@@ -2479,7 +2799,7 @@ func (s *Server) agentPollJobs(c *gin.Context) {
 				continue
 			}
 
-			event := models.TaskJobEvent{JobID: job.ID, EventType: "leased", Message: "job leased by agent", EventAt: now}
+			event := models.TaskJobEvent{JobID: job.ID, EventType: "leased", Message: fmt.Sprintf("被节点 %s 获取", req.NodeID), EventAt: now}
 			if err := tx.Create(&event).Error; err != nil {
 				_ = s.redisStore.ReleaseJobLease(ctx, managerID, job.ID, req.NodeID)
 				return err
@@ -2610,6 +2930,7 @@ func (s *Server) updateJobStatusByAgent(c *gin.Context, eventType string, nextSt
 		if req.Result != nil {
 			s.syncAgentResult(jobID, req.Result, now)
 		}
+		s.triggerTaskNotification(jobID, eventType, req.Message)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
@@ -2695,6 +3016,54 @@ func (s *Server) syncAgentResult(jobID uint, result map[string]any, now time.Tim
 
 	if len(updates) > 1 {
 		_ = s.db.Model(&models.User{}).Where("id = ?", job.UserID).Updates(updates).Error
+	}
+}
+
+// notifyWorker consumes NotifyRequests from notifyCh and sends notifications.
+func (s *Server) notifyWorker() {
+	for req := range s.notifyCh {
+		var user models.User
+		if err := s.db.Select("id, account_no, username, notify_config").
+			Where("id = ?", req.UserID).First(&user).Error; err != nil {
+			log.Printf("[notify] failed to load user %d: %v", req.UserID, err)
+			continue
+		}
+
+		nc := map[string]any(user.NotifyConfig)
+		if nc == nil {
+			continue
+		}
+
+		req.AccountNo = user.AccountNo
+		req.Username = user.Username
+
+		wechatEnabled, _ := nc["wechat_enabled"].(bool)
+		miaoCode, _ := nc["wechat_miao_code"].(string)
+		if wechatEnabled && miaoCode != "" {
+			text := notify.BuildNotificationText(req)
+			if err := s.notifier.SendMiaoTiXing(miaoCode, text); err != nil {
+				log.Printf("[notify] wechat send failed for user %d: %v", req.UserID, err)
+			}
+		}
+	}
+}
+
+// triggerTaskNotification sends a non-blocking notification request for a completed/failed job.
+func (s *Server) triggerTaskNotification(jobID uint, eventType string, message string) {
+	var job models.TaskJob
+	if err := s.db.Select("id, user_id, task_type").Where("id = ?", jobID).First(&job).Error; err != nil {
+		return
+	}
+
+	select {
+	case s.notifyCh <- notify.NotifyRequest{
+		UserID:    job.UserID,
+		TaskType:  job.TaskType,
+		EventType: eventType,
+		Message:   message,
+	}:
+	default:
+		log.Printf("[notify] channel full, dropping notification for job %d", jobID)
 	}
 }
 
@@ -2833,17 +3202,22 @@ func (s *Server) agentReportLogs(c *gin.Context) {
 	}
 
 	now := time.Now().UTC()
-	for _, logEntry := range req.Logs {
-		entry := models.AuditLog{
-			ActorType:  "agent",
-			ActorID:    managerID,
-			Action:     logEntry.Type,
-			TargetType: "user",
-			TargetID:   userID,
-			Detail:     datatypes.JSONMap{"level": logEntry.Level, "message": logEntry.Message, "ts": logEntry.Ts},
-			CreatedAt:  now,
+	if len(req.Logs) > 0 {
+		entries := make([]models.AuditLog, 0, len(req.Logs))
+		for _, logEntry := range req.Logs {
+			entries = append(entries, models.AuditLog{
+				ActorType:  "agent",
+				ActorID:    managerID,
+				Action:     logEntry.Type,
+				TargetType: "user",
+				TargetID:   userID,
+				Detail:     datatypes.JSONMap{"level": logEntry.Level, "message": logEntry.Message, "ts": logEntry.Ts},
+				CreatedAt:  now,
+			})
 		}
-		s.db.Create(&entry)
+		if err := s.db.Create(&entries).Error; err != nil {
+			log.Printf("batch audit log insert failed: %v", err)
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "ok", "count": len(req.Logs)})
 }
@@ -3108,10 +3482,51 @@ func (s *Server) ensureTaskConfigForTypeTx(tx *gorm.DB, userID uint, userType st
 	}).Error
 }
 
+func generateChineseDescription(eventType, message, errorCode, leasedByNode string) string {
+	switch eventType {
+	case "leased":
+		if leasedByNode != "" {
+			return fmt.Sprintf("被节点 %s 获取", leasedByNode)
+		}
+		return "已被节点获取"
+	case "start":
+		return "开始执行"
+	case "success":
+		return "执行成功"
+	case "fail":
+		desc := "执行失败"
+		if errorCode != "" {
+			desc += "：" + chineseErrorCode(errorCode)
+		}
+		return desc
+	default:
+		if message != "" {
+			return message
+		}
+		return "-"
+	}
+}
+
+func chineseErrorCode(code string) string {
+	switch code {
+	case "LOCAL_ACCOUNT_NOT_MAPPED":
+		return "本地账号未映射"
+	case "LOCAL_BATCH_FAILED":
+		return "本地执行失败"
+	case "LOCAL_ACCOUNT_MISSING":
+		return "缺少本地账号"
+	case "TASK_TYPE_INVALID":
+		return "任务类型无效"
+	default:
+		return code
+	}
+}
+
 func (s *Server) queryUserLogsPaginated(managerID, userID uint, pg paginationParams) ([]gin.H, int64, error) {
 	baseQuery := s.db.Model(&models.TaskJobEvent{}).
 		Joins("JOIN task_jobs ON task_jobs.id = task_job_events.job_id").
-		Where("task_jobs.manager_id = ? AND task_jobs.user_id = ?", managerID, userID)
+		Where("task_jobs.manager_id = ? AND task_jobs.user_id = ?", managerID, userID).
+		Where("task_job_events.event_type NOT IN ?", []string{"timeout_requeued", "heartbeat", "leased"})
 
 	var total int64
 	if err := baseQuery.Count(&total).Error; err != nil {
@@ -3119,19 +3534,19 @@ func (s *Server) queryUserLogsPaginated(managerID, userID uint, pg paginationPar
 	}
 
 	type logRow struct {
-		ID        uint      `gorm:"column:id"`
-		JobID     uint      `gorm:"column:job_id"`
-		EventType string    `gorm:"column:event_type"`
-		Message   string    `gorm:"column:message"`
-		ErrorCode string    `gorm:"column:error_code"`
-		EventAt   time.Time `gorm:"column:event_at"`
-		TaskType  string    `gorm:"column:task_type"`
-		JobStatus string    `gorm:"column:job_status"`
+		ID           uint      `gorm:"column:id"`
+		JobID        uint      `gorm:"column:job_id"`
+		EventType    string    `gorm:"column:event_type"`
+		Message      string    `gorm:"column:message"`
+		ErrorCode    string    `gorm:"column:error_code"`
+		EventAt      time.Time `gorm:"column:event_at"`
+		TaskType     string    `gorm:"column:task_type"`
+		LeasedByNode string    `gorm:"column:leased_by_node"`
 	}
 	var rows []logRow
 	if err := baseQuery.
-		Select("task_job_events.id, task_job_events.job_id, task_job_events.event_type, task_job_events.message, task_job_events.error_code, task_job_events.event_at, task_jobs.task_type, task_jobs.status AS job_status").
-		Order("task_job_events.event_at desc").
+		Select("task_job_events.id, task_job_events.job_id, task_job_events.event_type, task_job_events.message, task_job_events.error_code, task_job_events.event_at, task_jobs.task_type, task_jobs.leased_by_node").
+		Order("task_job_events.event_at DESC").
 		Offset(pg.Offset).Limit(pg.PageSize).
 		Scan(&rows).Error; err != nil {
 		return nil, 0, err
@@ -3140,13 +3555,13 @@ func (s *Server) queryUserLogsPaginated(managerID, userID uint, pg paginationPar
 	result := make([]gin.H, 0, len(rows))
 	for _, r := range rows {
 		result = append(result, gin.H{
-			"job_id":     r.JobID,
-			"task_type":  r.TaskType,
-			"event_type": r.EventType,
-			"job_status": r.JobStatus,
-			"message":    r.Message,
-			"error_code": r.ErrorCode,
-			"event_at":   r.EventAt,
+			"job_id":         r.JobID,
+			"task_type":      r.TaskType,
+			"event_type":     r.EventType,
+			"message":        generateChineseDescription(r.EventType, r.Message, r.ErrorCode, r.LeasedByNode),
+			"error_code":     r.ErrorCode,
+			"event_at":       r.EventAt,
+			"leased_by_node": r.LeasedByNode,
 		})
 	}
 	return result, total, nil
@@ -3246,7 +3661,44 @@ func (s *Server) audit(actorType string, actorID uint, action, targetType string
 		IP:         ip,
 		CreatedAt:  time.Now().UTC(),
 	}
-	_ = s.db.Create(&entry).Error
+	select {
+	case s.auditCh <- entry:
+	default:
+		// Channel full, write synchronously as fallback
+		_ = s.db.Create(&entry).Error
+	}
+}
+
+func (s *Server) auditWorker() {
+	batch := make([]models.AuditLog, 0, 50)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		if err := s.db.Create(&batch).Error; err != nil {
+			log.Printf("audit batch insert failed: %v", err)
+		}
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case entry, ok := <-s.auditCh:
+			if !ok {
+				flush()
+				return
+			}
+			batch = append(batch, entry)
+			if len(batch) >= 50 {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
 }
 
 func (s *Server) superListAuditLogs(c *gin.Context) {

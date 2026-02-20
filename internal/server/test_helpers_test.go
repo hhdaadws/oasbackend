@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -20,10 +21,20 @@ import (
 )
 
 type inMemoryStore struct {
-	mu            sync.Mutex
-	agentSessions map[string]uint
-	jobLeases     map[string]leaseRecord
-	scheduleSlots map[string]time.Time
+	mu              sync.Mutex
+	agentSessions   map[string]uint
+	jobLeases       map[string]leaseRecord
+	scheduleSlots   map[string]time.Time
+	managerExpiries map[uint]time.Time
+	scanLeases      map[uint]leaseRecord
+	scanCooldowns   map[uint]cooldownRecord
+	scanUserChoice  map[uint]map[string]string
+	scanHeartbeats  map[uint]time.Time
+}
+
+type cooldownRecord struct {
+	count  int
+	lastAt time.Time
 }
 
 type leaseRecord struct {
@@ -33,9 +44,14 @@ type leaseRecord struct {
 
 func newInMemoryStore() *inMemoryStore {
 	return &inMemoryStore{
-		agentSessions: map[string]uint{},
-		jobLeases:     map[string]leaseRecord{},
-		scheduleSlots: map[string]time.Time{},
+		agentSessions:   map[string]uint{},
+		jobLeases:       map[string]leaseRecord{},
+		scheduleSlots:   map[string]time.Time{},
+		managerExpiries: map[uint]time.Time{},
+		scanLeases:      map[uint]leaseRecord{},
+		scanCooldowns:   map[uint]cooldownRecord{},
+		scanUserChoice:  map[uint]map[string]string{},
+		scanHeartbeats:  map[uint]time.Time{},
 	}
 }
 
@@ -146,6 +162,149 @@ func (s *inMemoryStore) AcquireScheduleSlot(
 	}
 	s.scheduleSlots[key] = now.Add(ttl)
 	return true, nil
+}
+
+func (s *inMemoryStore) GetManagerExpiry(ctx context.Context, managerID uint) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exp, ok := s.managerExpiries[managerID]
+	if !ok {
+		return time.Time{}, fmt.Errorf("not found")
+	}
+	return exp, nil
+}
+
+func (s *inMemoryStore) SetManagerExpiry(ctx context.Context, managerID uint, expiresAt time.Time, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.managerExpiries[managerID] = expiresAt
+	return nil
+}
+
+// ── Scan job mock implementations ──────────────────────
+
+func (s *inMemoryStore) AcquireScanLease(ctx context.Context, scanJobID uint, nodeID string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if record, ok := s.scanLeases[scanJobID]; ok && record.expireAt.After(now) {
+		return false, nil
+	}
+	s.scanLeases[scanJobID] = leaseRecord{nodeID: nodeID, expireAt: now.Add(ttl)}
+	return true, nil
+}
+
+func (s *inMemoryStore) RefreshScanLease(ctx context.Context, scanJobID uint, nodeID string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.scanLeases[scanJobID]
+	if !ok || !record.expireAt.After(now) || record.nodeID != nodeID {
+		return false, nil
+	}
+	record.expireAt = now.Add(ttl)
+	s.scanLeases[scanJobID] = record
+	return true, nil
+}
+
+func (s *inMemoryStore) ReleaseScanLease(ctx context.Context, scanJobID uint, nodeID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.scanLeases[scanJobID]
+	if !ok || record.nodeID != nodeID {
+		return nil
+	}
+	delete(s.scanLeases, scanJobID)
+	return nil
+}
+
+func (s *inMemoryStore) IsScanLeaseOwner(ctx context.Context, scanJobID uint, nodeID string) (bool, error) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.scanLeases[scanJobID]
+	if !ok || !record.expireAt.After(now) {
+		return false, nil
+	}
+	return record.nodeID == nodeID, nil
+}
+
+func (s *inMemoryStore) ClearScanLease(ctx context.Context, scanJobID uint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.scanLeases, scanJobID)
+	return nil
+}
+
+func (s *inMemoryStore) SetScanCooldown(ctx context.Context, userID uint, count int, lastAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scanCooldowns[userID] = cooldownRecord{count: count, lastAt: lastAt}
+	return nil
+}
+
+func (s *inMemoryStore) GetScanCooldown(ctx context.Context, userID uint) (int, time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.scanCooldowns[userID]
+	if !ok {
+		return 0, time.Time{}, nil
+	}
+	return record.count, record.lastAt, nil
+}
+
+func (s *inMemoryStore) SetScanUserChoice(ctx context.Context, scanJobID uint, choiceType string, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scanUserChoice[scanJobID] == nil {
+		s.scanUserChoice[scanJobID] = map[string]string{}
+	}
+	s.scanUserChoice[scanJobID][choiceType] = value
+	return nil
+}
+
+func (s *inMemoryStore) GetScanUserChoice(ctx context.Context, scanJobID uint) (map[string]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	choices, ok := s.scanUserChoice[scanJobID]
+	if !ok {
+		return map[string]string{}, nil
+	}
+	result := make(map[string]string, len(choices))
+	for k, v := range choices {
+		result[k] = v
+	}
+	return result, nil
+}
+
+func (s *inMemoryStore) ClearScanUserChoice(ctx context.Context, scanJobID uint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.scanUserChoice, scanJobID)
+	return nil
+}
+
+func (s *inMemoryStore) SetScanUserHeartbeat(ctx context.Context, scanJobID uint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scanHeartbeats[scanJobID] = time.Now().UTC()
+	return nil
+}
+
+func (s *inMemoryStore) IsScanUserOnline(ctx context.Context, scanJobID uint) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hb, ok := s.scanHeartbeats[scanJobID]
+	if !ok {
+		return false, nil
+	}
+	return time.Since(hb) < 30*time.Second, nil
 }
 
 func setupTestServer(t *testing.T) (*Server, *gorm.DB) {

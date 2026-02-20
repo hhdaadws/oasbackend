@@ -7,7 +7,6 @@
         <p class="subtitle">统一管理管理员生命周期、续费秘钥状态和治理策略。</p>
       </div>
       <div class="status-pills">
-        <el-button plain @click="$emit('navigate', '/super-admin-login')">返回超管登录</el-button>
         <el-button type="danger" @click="logout">退出超管</el-button>
       </div>
     </header>

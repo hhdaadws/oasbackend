@@ -5,6 +5,7 @@ import { ElMessage } from "element-plus";
 import { parseApiError, userApi } from "../../lib/http";
 import { userTypeLabel, ensureTaskConfig, parseTaskConfigFromRaw, SPECIAL_TASK_NAMES } from "../../lib/helpers";
 import { useTaskTemplates } from "../../composables/useTaskTemplates";
+import LineupTab from "./LineupTab.vue";
 
 const props = defineProps({
   token: { type: String, default: "" },
@@ -17,6 +18,7 @@ const { templateCache, ensureTaskTemplates } = useTaskTemplates();
 
 const userType = ref("daily");
 const taskFilter = ref("");
+const lineupDialogVisible = ref(false);
 
 const filteredTaskRows = computed(() => {
   if (taskFilter.value === "enabled") return taskRows.value.filter(r => r.config.enabled === true);
@@ -134,6 +136,7 @@ function tableRowClassName({ row }) {
           <el-radio-button value="disabled">未启用</el-radio-button>
         </el-radio-group>
         <el-button plain :loading="loading.tasks" @click="loadMeTasks">刷新</el-button>
+        <el-button type="primary" plain @click="lineupDialogVisible = true">阵容配置</el-button>
       </div>
     </div>
     <div class="data-table-wrapper">
@@ -239,6 +242,7 @@ function tableRowClassName({ row }) {
       </el-collapse-item>
     </el-collapse>
     <p class="tip-text">系统会按用户类型过滤任务，并按"默认 + 现有 + 提交"合并更新。</p>
+    <LineupTab :token="token" v-model:visible="lineupDialogVisible" />
   </article>
 </template>
 
