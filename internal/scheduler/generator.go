@@ -514,16 +514,17 @@ func duiyiWindowStartForTime(bjTime time.Time) time.Time {
 	return time.Date(bjTime.Year(), bjTime.Month(), bjTime.Day(), windowHour, 0, 0, 0, taskmeta.BJLoc)
 }
 
-// expireStaleDuiyiJobs expires pending 对弈竞猜 tasks whose execution window
-// has passed. A task is stale if the current window start time is after the
-// task's window start time.
+// expireStaleDuiyiJobs expires pending/leased/running 对弈竞猜 tasks whose
+// execution window has passed. For leased/running tasks, only those with an
+// expired lease are cleaned up (to avoid interrupting active agent work).
 func (g *Generator) expireStaleDuiyiJobs(now time.Time) (int64, error) {
 	bjNow := now.In(taskmeta.BJLoc)
 	currentWindowStart := duiyiWindowStartForTime(bjNow)
 
+	activeStatuses := []string{models.JobStatusPending, models.JobStatusLeased, models.JobStatusRunning}
 	var staleTasks []models.TaskJob
-	if err := g.db.Where("status = ? AND task_type = ?",
-		models.JobStatusPending, "对弈竞猜").
+	if err := g.db.Where("status IN ? AND task_type = ?",
+		activeStatuses, "对弈竞猜").
 		Find(&staleTasks).Error; err != nil {
 		return 0, err
 	}
@@ -535,11 +536,17 @@ func (g *Generator) expireStaleDuiyiJobs(now time.Time) (int64, error) {
 	for _, job := range staleTasks {
 		jobBJ := job.ScheduledAt.In(taskmeta.BJLoc)
 		jobWindowStart := duiyiWindowStartForTime(jobBJ)
-		// If the job was created outside any window (before 10:00), it's stale.
-		// If the current window start is after the job's window start, it's stale.
-		if jobWindowStart.IsZero() || currentWindowStart.After(jobWindowStart) {
-			staleIDs = append(staleIDs, job.ID)
+		// Skip if the job is in the current window
+		if !jobWindowStart.IsZero() && !currentWindowStart.After(jobWindowStart) {
+			continue
 		}
+		// For leased/running tasks, only expire if lease has also expired
+		if job.Status != models.JobStatusPending {
+			if job.LeaseUntil != nil && job.LeaseUntil.After(now) {
+				continue // lease still valid, agent may be actively working
+			}
+		}
+		staleIDs = append(staleIDs, job.ID)
 	}
 	if len(staleIDs) == 0 {
 		return 0, nil
@@ -548,10 +555,27 @@ func (g *Generator) expireStaleDuiyiJobs(now time.Time) (int64, error) {
 	if err := g.db.Model(&models.TaskJob{}).
 		Where("id IN ?", staleIDs).
 		Updates(map[string]any{
-			"status":     models.JobStatusFailed,
-			"updated_at": now,
+			"status":         models.JobStatusFailed,
+			"leased_by_node": "",
+			"lease_until":    nil,
+			"updated_at":     now,
 		}).Error; err != nil {
 		return 0, err
+	}
+
+	// Clear Redis leases for previously leased/running tasks
+	staleIDSet := make(map[uint]struct{}, len(staleIDs))
+	for _, id := range staleIDs {
+		staleIDSet[id] = struct{}{}
+	}
+	ctx := context.Background()
+	for _, job := range staleTasks {
+		if _, ok := staleIDSet[job.ID]; !ok {
+			continue
+		}
+		if job.Status == models.JobStatusLeased || job.Status == models.JobStatusRunning {
+			_ = g.store.ClearJobLease(ctx, job.ManagerID, job.ID)
+		}
 	}
 
 	events := make([]models.TaskJobEvent, 0, len(staleIDs))
