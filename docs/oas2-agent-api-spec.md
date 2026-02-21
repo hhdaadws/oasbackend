@@ -97,11 +97,12 @@ Agent 登录（使用 Manager 凭据）。
 {
   "token": "<jwt>",
   "manager_id": 1,
-  "node_id": "LAPTOP-ABC-1234"
+  "node_id": "LAPTOP-ABC-1234",
+  "manager_type": "daily"
 }
 ```
 
-**说明：** 登录时会自动注册/更新 AgentNode 记录，并检查 Manager 是否过期。
+**说明：** 登录时会自动注册/更新 AgentNode 记录，并检查 Manager 是否过期。`manager_type` 为该 Agent 所属管理员的类型（`daily`/`shuaka`/`duiyi`/`all`），Oas2.0 用于决定可用的调度器类型筛选。
 
 ---
 
@@ -114,9 +115,17 @@ Agent 登录（使用 Manager 凭据）。
 {
   "node_id": "LAPTOP-ABC-1234",
   "limit": 10,                    // 可选，默认 10
-  "lease_seconds": 90              // 可选，默认 90
+  "lease_seconds": 90,             // 可选，默认 90
+  "user_types": ["daily", "foster"]  // 可选，按用户类型过滤
 }
 ```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `node_id` | string | 是 | 节点标识 |
+| `limit` | int | 否 | 最多返回任务数，默认 10 |
+| `lease_seconds` | int | 否 | 租约时长，默认 90 |
+| `user_types` | string[] | 否 | 按用户类型过滤，不传则不过滤。可选值：`daily`/`duiyi`/`shuaka`/`foster`/`jingzhi` |
 
 **响应：**
 ```json
@@ -152,7 +161,11 @@ Agent 登录（使用 Manager 凭据）。
 
 **Payload 特殊字段 — 对弈竞猜（`duiyi_jingcai`）：**
 
-当 `TaskType` 为 `duiyi_jingcai` 时，`Payload` 中会额外包含 `"answer"` 字段，值为 `"左"` 或 `"右"`。此字段由云端调度器在生成任务时根据管理员配置的当前时间窗口答案自动注入。示例：
+当 `TaskType` 为 `duiyi_jingcai` 时，`Payload` 中会额外包含 `"answer"` 字段，值为 `"左"` 或 `"右"`。此字段由云端调度器在生成任务时自动注入，答案来源取决于用户配置：
+- 如果用户选择了博主答案来源（`duiyi_answer_source=blogger`），使用对应博主的当前时间窗口答案
+- 如果用户使用管理员答案来源（`duiyi_answer_source=manager`，默认），使用所属管理员的当前时间窗口答案
+
+示例：
 
 ```json
 {
@@ -164,7 +177,31 @@ Agent 登录（使用 Manager 凭据）。
 }
 ```
 
-> 如果管理员未为当前时间窗口配置答案，则该时间窗口不会生成 `duiyi_jingcai` 任务。
+> 如果答案来源（管理员或博主）未为当前时间窗口配置答案，则该时间窗口不会生成 `duiyi_jingcai` 任务。
+
+**Payload 特殊字段 — 组队御魂（`team_yuhun`）：**
+
+当 `TaskType` 为 `team_yuhun` 时，`Payload` 中包含组队信息：
+
+```json
+{
+  "Payload": {
+    "user_id": 5,
+    "source": "cloud_scheduler",
+    "team_request_id": 42,
+    "role": "driver",
+    "partner_user_id": 8,
+    "lineup": {"group": 1, "position": 2}
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `team_request_id` | uint | 组队请求 ID |
+| `role` | string | 本用户角色：`driver`（司机）/ `attacker`（打手） |
+| `partner_user_id` | uint | 队友的 user_id |
+| `lineup` | object | 阵容配置 `{group, position}` |
 
 ---
 
@@ -325,7 +362,7 @@ Agent 登录（使用 Manager 凭据）。
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | login_id | string | 用户的登录编号，对应本地 `putonglogindata/{login_id}/` 目录 |
-| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka`。duiyi 用户的 task_config 仅含"对弈竞猜" |
+| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka` / `foster` / `jingzhi`。duiyi 用户的 task_config 仅含"对弈竞猜"；foster 任务池同 daily；jingzhi 任务池同 daily + "组队御魂" |
 | task_config | object | 按用户类型标准化后的任务配置 |
 
 ---
@@ -568,13 +605,13 @@ Agent 登录（使用 Manager 凭据）。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `user_type` | string | 可选，按用户类型过滤（daily/duiyi/shuaka） |
+| `user_type` | string | 可选，按用户类型过滤（daily/duiyi/shuaka/foster/jingzhi） |
 
 **响应：**
 ```json
 {
   "data": {
-    "pools": { "daily": [...], "duiyi": [...], "shuaka": [...] },
+    "pools": { "daily": [...], "duiyi": [...], "shuaka": [...], "foster": [...], "jingzhi": [...] },
     "templates": { "signin": {...}, "explore": {...}, ... }
   }
 }
@@ -666,6 +703,7 @@ pending → leased → running → success
 | `weekly_share` | 每周分享 |
 | `collect_fanhe_jiuhu` | 领取饭盒酒壶 |
 | `duiyi_jingcai` | 对弈竞猜 |
+| `team_yuhun` | 组队御魂（仅 jingzhi 用户，由组队预约到期后自动生成） |
 | `init` | 初始化 |
 | `init_collect_reward` | 初始化-领取奖励 |
 | `init_rent_shikigami` | 初始化-租借式神 |
@@ -686,6 +724,16 @@ pending → leased → running → success
 | `LOCAL_EXEC_FAIL` | 通用执行错误 |
 | `CANCELLED` | 扫码被用户取消 |
 | `EXECUTOR_ERROR` | 扫码执行器通用错误 |
+
+### 用户类型
+
+| user_type | 说明 | 任务池 |
+|-----------|------|--------|
+| `daily` | 日常 | 标准日常任务 |
+| `foster` | 寄养 | 同 daily |
+| `jingzhi` | 精致日常 | 同 daily + 组队御魂 |
+| `duiyi` | 对弈竞猜 | 仅对弈竞猜 |
+| `shuaka` | 刷卡 | 刷卡相关任务 |
 
 ### ScanJob 状态流转
 

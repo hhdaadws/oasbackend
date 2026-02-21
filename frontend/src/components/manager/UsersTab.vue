@@ -50,6 +50,14 @@
           <span class="stat-label">刷卡</span>
           <strong class="stat-value">{{ userSummary.shuaka }}</strong>
         </div>
+        <div class="stat-item">
+          <span class="stat-label">寄养</span>
+          <strong class="stat-value">{{ userSummary.foster }}</strong>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">精致日常</span>
+          <strong class="stat-value">{{ userSummary.jingzhi }}</strong>
+        </div>
       </div>
 
       <TableSkeleton v-if="users.length === 0 && loading.users" :rows="5" :columns="5" />
@@ -92,6 +100,11 @@
           </el-table-column>
           <el-table-column label="到期时间" min-width="190" sortable>
             <template #default="scope">{{ formatTime(scope.row.expires_at) }}</template>
+          </el-table-column>
+          <el-table-column label="查看日志" width="100" align="center">
+            <template #default="scope">
+              <el-switch v-model="scope.row.can_view_logs" @change="toggleCanViewLogs(scope.row)" />
+            </template>
           </el-table-column>
           <el-table-column label="操作" width="160">
             <template #default="scope">
@@ -177,6 +190,10 @@
                 <el-option label="正常" value="normal" />
                 <el-option label="失效" value="invalid" />
               </el-select>
+            </el-form-item>
+            <el-form-item label="查看日志">
+              <el-switch v-model="detailCanViewLogs" @change="toggleDetailCanViewLogs" />
+              <span style="margin-left: 8px; color: #909399; font-size: 12px;">（允许用户查看执行日志）</span>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="loading.lifecycle" @click="saveUserLifecycle">保存</el-button>
@@ -467,6 +484,8 @@ const lifecycleForm = reactive({
   archive_status: "",
 });
 
+const detailCanViewLogs = ref(false);
+
 const selectedUserAssets = reactive({
   stamina: 0,
   gouyu: 0,
@@ -488,6 +507,8 @@ const userSummary = reactive({
   daily: 0,
   duiyi: 0,
   shuaka: 0,
+  foster: 0,
+  jingzhi: 0,
 });
 
 const { pagination, updateTotal, resetPage, paginationParams } = usePagination({ defaultPageSize: 50 });
@@ -609,7 +630,7 @@ async function loadUsers() {
     };
     const response = await managerApi.listUsers(props.token, params);
     users.value = (response.items || []).map((item) => ({ ...item, _deleting: false }));
-    patchSummary(userSummary, response.summary, ["total", "active", "expired", "disabled", "daily", "duiyi", "shuaka"]);
+    patchSummary(userSummary, response.summary, ["total", "active", "expired", "disabled", "daily", "duiyi", "shuaka", "foster", "jingzhi"]);
     updateTotal(response.total || response.summary?.total || users.value.length);
   } catch (error) {
     ElMessage.error(parseApiError(error));
@@ -623,6 +644,7 @@ async function selectUser(row) {
   lifecycleForm.expires_at = row.expires_at || "";
   lifecycleForm.extend_days = 0;
   lifecycleForm.archive_status = row.archive_status || "normal";
+  detailCanViewLogs.value = !!row.can_view_logs;
   showUserDetailDialog.value = true;
   await props.ensureTaskTemplates(row.user_type || "daily", userTypeOptions);
   await Promise.all([loadSelectedUserTasks(), loadSelectedUserAssets()]);
@@ -781,6 +803,33 @@ async function batchSetUserAssets() {
     ElMessage.error(parseApiError(error));
   } finally {
     loading.batchAssets = false;
+  }
+}
+
+async function toggleCanViewLogs(row) {
+  try {
+    await managerApi.patchUserSettings(props.token, row.id, {
+      can_view_logs: !!row.can_view_logs,
+    });
+    ElMessage.success(row.can_view_logs ? "已允许查看日志" : "已禁止查看日志");
+  } catch (error) {
+    row.can_view_logs = !row.can_view_logs;
+    ElMessage.error(parseApiError(error));
+  }
+}
+
+async function toggleDetailCanViewLogs(val) {
+  if (!props.selectedUserId) return;
+  try {
+    await managerApi.patchUserSettings(props.token, props.selectedUserId, {
+      can_view_logs: !!val,
+    });
+    const row = users.value.find((u) => u.id === props.selectedUserId);
+    if (row) row.can_view_logs = !!val;
+    ElMessage.success(val ? "已允许查看日志" : "已禁止查看日志");
+  } catch (error) {
+    detailCanViewLogs.value = !val;
+    ElMessage.error(parseApiError(error));
   }
 }
 

@@ -184,6 +184,9 @@ func (s *Server) mountRoutes() {
 		superGroup.DELETE("/manager-renewal-keys/:id", s.superDeleteManagerRenewalKey)
 		superGroup.POST("/manager-renewal-keys/batch-delete", s.superBatchDeleteRenewalKeys)
 		superGroup.GET("/audit-logs", s.superListAuditLogs)
+		superGroup.POST("/bloggers", s.superCreateBlogger)
+		superGroup.GET("/bloggers", s.superListBloggers)
+		superGroup.DELETE("/bloggers/:id", s.superDeleteBlogger)
 	}
 
 	managerAuthGroup := api.Group("/manager")
@@ -211,6 +214,7 @@ func (s *Server) mountRoutes() {
 		managerGroup.PUT("/users/:user_id/tasks", s.managerPutUserTasks)
 		managerGroup.GET("/users/:user_id/logs", s.managerGetUserLogs)
 		managerGroup.DELETE("/users/:user_id/logs", s.managerDeleteUserLogs)
+		managerGroup.PATCH("/users/:user_id/settings", s.managerPatchUserSettings)
 		managerGroup.POST("/users/batch-lifecycle", s.managerBatchUserLifecycle)
 		managerGroup.POST("/users/batch-assets", s.managerBatchUserAssets)
 		managerGroup.DELETE("/users/:user_id", s.managerDeleteUser)
@@ -220,6 +224,9 @@ func (s *Server) mountRoutes() {
 		managerGroup.POST("/activation-codes/batch-delete", s.managerBatchDeleteActivationCodes)
 		managerGroup.GET("/duiyi-answers", s.managerGetDuiyiAnswers)
 		managerGroup.PUT("/duiyi-answers", s.managerPutDuiyiAnswers)
+		managerGroup.GET("/bloggers", s.managerListBloggers)
+		managerGroup.GET("/blogger-answers/:blogger_id", s.managerGetBloggerAnswers)
+		managerGroup.PUT("/blogger-answers/:blogger_id", s.managerPutBloggerAnswer)
 	}
 
 	userGroup := api.Group("/user")
@@ -240,6 +247,26 @@ func (s *Server) mountRoutes() {
 		userGroup.POST("/scan/choice", s.userScanChoice)
 		userGroup.POST("/scan/cancel", s.userScanCancel)
 		userGroup.POST("/scan/heartbeat", s.userScanHeartbeat)
+
+		// Friend system (jingzhi users only)
+		userGroup.GET("/friends", s.userListFriends)
+		userGroup.GET("/friend-requests", s.userListFriendRequests)
+		userGroup.POST("/friends/request", s.userSendFriendRequest)
+		userGroup.POST("/friends/:id/accept", s.userAcceptFriendRequest)
+		userGroup.POST("/friends/:id/reject", s.userRejectFriendRequest)
+		userGroup.DELETE("/friends/:id", s.userDeleteFriend)
+		userGroup.GET("/friends/candidates", s.userListFriendCandidates)
+
+		// Team Yuhun (jingzhi users only)
+		userGroup.POST("/team-yuhun/request", s.userSendTeamYuhunRequest)
+		userGroup.GET("/team-yuhun/requests", s.userListTeamYuhunRequests)
+		userGroup.POST("/team-yuhun/:id/accept", s.userAcceptTeamYuhunRequest)
+		userGroup.POST("/team-yuhun/:id/reject", s.userRejectTeamYuhunRequest)
+		userGroup.DELETE("/team-yuhun/:id", s.userCancelTeamYuhunRequest)
+
+		// Duiyi answer source (duiyi users)
+		userGroup.GET("/duiyi-answer-sources", s.userGetDuiyiAnswerSources)
+		userGroup.PUT("/duiyi-answer-source", s.userPutDuiyiAnswerSource)
 	}
 	// WebSocket endpoint (no middleware — token validated inside handler)
 	api.GET("/user/scan/ws", s.userScanWS)
@@ -491,6 +518,7 @@ func (s *Server) superCreateManagerRenewalKey(c *gin.Context) {
 	key := models.ManagerRenewalKey{
 		Code:                  code,
 		DurationDays:          req.DurationDays,
+		ManagerType:           models.NormalizeManagerType(req.ManagerType),
 		Status:                models.CodeStatusUnused,
 		CreatedBySuperAdminID: actorID,
 		CreatedAt:             now,
@@ -499,8 +527,8 @@ func (s *Server) superCreateManagerRenewalKey(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存密钥失败"})
 		return
 	}
-	s.audit(models.ActorTypeSuper, actorID, "create_manager_renewal_key", "manager_renewal_key", key.ID, datatypes.JSONMap{"duration_days": req.DurationDays}, c.ClientIP())
-	c.JSON(http.StatusCreated, gin.H{"code": key.Code, "duration_days": key.DurationDays})
+	s.audit(models.ActorTypeSuper, actorID, "create_manager_renewal_key", "manager_renewal_key", key.ID, datatypes.JSONMap{"duration_days": req.DurationDays, "manager_type": key.ManagerType}, c.ClientIP())
+	c.JSON(http.StatusCreated, gin.H{"code": key.Code, "duration_days": key.DurationDays, "manager_type": key.ManagerType})
 }
 
 func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
@@ -585,6 +613,7 @@ func (s *Server) superListManagerRenewalKeys(c *gin.Context) {
 			"id":                        key.ID,
 			"code":                      key.Code,
 			"duration_days":             key.DurationDays,
+			"manager_type":              key.ManagerType,
 			"status":                    key.Status,
 			"used_by_manager_id":        usedByManagerID,
 			"used_by_manager_username":  usedByManagerUsername,
@@ -682,6 +711,7 @@ func (s *Server) superListManagers(c *gin.Context) {
 		items = append(items, gin.H{
 			"id":            manager.ID,
 			"username":      manager.Username,
+			"manager_type":  manager.ManagerType,
 			"expires_at":    manager.ExpiresAt,
 			"is_expired":    isExpired,
 			"created_at":    manager.CreatedAt,
@@ -758,7 +788,7 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 {
+	if strings.TrimSpace(req.ExpiresAt) == "" && req.ExtendDays == 0 && strings.TrimSpace(req.ManagerType) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
 		return
 	}
@@ -791,6 +821,9 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 		newExpire := extendExpiry(manager.ExpiresAt, req.ExtendDays, now)
 		updates["expires_at"] = newExpire
 	}
+	if mt := strings.TrimSpace(req.ManagerType); mt != "" {
+		updates["manager_type"] = models.NormalizeManagerType(mt)
+	}
 
 	if err := s.db.Model(&models.Manager{}).Where("id = ?", managerID).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新管理员生命周期失败"})
@@ -798,8 +831,9 @@ func (s *Server) superPatchManagerLifecycle(c *gin.Context) {
 	}
 	actorID := getUint(c, ctxActorIDKey)
 	s.audit(models.ActorTypeSuper, actorID, "patch_manager_lifecycle", "manager", managerID, datatypes.JSONMap{
-		"expires_at":  req.ExpiresAt,
-		"extend_days": req.ExtendDays,
+		"expires_at":   req.ExpiresAt,
+		"extend_days":  req.ExtendDays,
+		"manager_type": req.ManagerType,
 	}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": "manager lifecycle updated"})
 }
@@ -1026,10 +1060,14 @@ func (s *Server) managerRedeemRenewalKey(c *gin.Context) {
 			return err
 		}
 		newExpire := extendExpiry(manager.ExpiresAt, key.DurationDays, now)
-		if err := tx.Model(&models.Manager{}).Where("id = ?", managerID).Updates(map[string]any{
+		updates := map[string]any{
 			"expires_at": newExpire,
 			"updated_at": now,
-		}).Error; err != nil {
+		}
+		if key.ManagerType != "" {
+			updates["manager_type"] = models.NormalizeManagerType(key.ManagerType)
+		}
+		if err := tx.Model(&models.Manager{}).Where("id = ?", managerID).Updates(updates).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&models.ManagerRenewalKey{}).Where("id = ?", key.ID).Updates(map[string]any{
@@ -1067,11 +1105,12 @@ func (s *Server) managerGetMe(c *gin.Context) {
 	now := time.Now().UTC()
 	expired := manager.ExpiresAt == nil || !manager.ExpiresAt.After(now)
 	c.JSON(http.StatusOK, gin.H{
-		"id":         manager.ID,
-		"username":   manager.Username,
-		"alias":      manager.Alias,
-		"expires_at": manager.ExpiresAt,
-		"expired":    expired,
+		"id":           manager.ID,
+		"username":     manager.Username,
+		"alias":        manager.Alias,
+		"manager_type": manager.ManagerType,
+		"expires_at":   manager.ExpiresAt,
+		"expired":      expired,
 	})
 }
 
@@ -1097,7 +1136,21 @@ func (s *Server) managerCreateActivationCode(c *gin.Context) {
 		return
 	}
 	managerID := getUint(c, ctxActorIDKey)
+
+	var manager models.Manager
+	if err := s.db.Where("id = ?", managerID).First(&manager).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询管理员失败"})
+		return
+	}
+
 	userType := models.NormalizeUserType(req.UserType)
+	if manager.ManagerType != models.ManagerTypeAll {
+		userType = manager.ManagerType
+	} else if !models.ManagerCanCreateUserType(manager.ManagerType, userType) {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "无权创建该类型的激活码"})
+		return
+	}
+
 	code, err := auth.GenerateOpaqueToken("uac", 12)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "生成激活码失败"})
@@ -1292,7 +1345,18 @@ func (s *Server) managerQuickCreateUser(c *gin.Context) {
 		return
 	}
 	managerID := getUint(c, ctxActorIDKey)
+
+	var manager models.Manager
+	if err := s.db.Where("id = ?", managerID).First(&manager).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询管理员失败"})
+		return
+	}
+
 	userType := models.NormalizeUserType(req.UserType)
+	if manager.ManagerType != models.ManagerTypeAll {
+		userType = manager.ManagerType
+	}
+
 	now := time.Now().UTC()
 
 	var createdUser models.User
@@ -1436,6 +1500,7 @@ func (s *Server) managerListUsers(c *gin.Context) {
 			"created_by":     user.CreatedBy,
 			"created_at":     user.CreatedAt,
 			"updated_at":     user.UpdatedAt,
+			"can_view_logs":  user.CanViewLogs,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1841,6 +1906,41 @@ func (s *Server) managerDeleteUserLogs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "logs cleared"})
+}
+
+func (s *Server) managerPatchUserSettings(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	userID, ok := parseUintParam(c, "user_id")
+	if !ok {
+		return
+	}
+	if !s.managerOwnsUser(c, managerID, userID) {
+		return
+	}
+
+	var req managerPatchUserSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	if req.CanViewLogs == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "至少需要提供一个字段"})
+		return
+	}
+
+	updates := map[string]any{"updated_at": time.Now().UTC()}
+	if req.CanViewLogs != nil {
+		updates["can_view_logs"] = *req.CanViewLogs
+	}
+
+	if err := s.db.Model(&models.User{}).Where("id = ? AND manager_id = ?", userID, managerID).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "更新用户设置失败"})
+		return
+	}
+	s.audit(models.ActorTypeManager, managerID, "patch_user_settings", "user", userID, datatypes.JSONMap{
+		"can_view_logs": req.CanViewLogs,
+	}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "user settings updated"})
 }
 
 func (s *Server) managerDeleteUser(c *gin.Context) {
@@ -2377,6 +2477,7 @@ func (s *Server) userGetMeProfile(c *gin.Context) {
 		"token_created":  token.CreatedAt,
 		"last_used_at":   token.LastUsedAt,
 		"notify_config":  user.NotifyConfig,
+		"can_view_logs":  user.CanViewLogs,
 	})
 }
 
@@ -2574,6 +2675,17 @@ func (s *Server) userPutMeTasks(c *gin.Context) {
 func (s *Server) userGetMeLogs(c *gin.Context) {
 	userID := getUint(c, ctxUserIDKey)
 	managerID := getUint(c, ctxManagerIDKey)
+
+	var user models.User
+	if err := s.db.Select("can_view_logs").Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
+		return
+	}
+	if !user.CanViewLogs {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "管理员未开放日志查看权限"})
+		return
+	}
+
 	pg := readPagination(c, 50, 200)
 	items, total, err := s.queryUserLogsPaginated(managerID, userID, pg)
 	if err != nil {
@@ -2752,7 +2864,7 @@ func (s *Server) agentLogin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存Redis Agent会话失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"token": token, "manager_id": manager.ID, "node_id": req.NodeID})
+	c.JSON(http.StatusOK, gin.H{"token": token, "manager_id": manager.ID, "node_id": req.NodeID, "manager_type": manager.ManagerType})
 }
 
 func (s *Server) agentPollJobs(c *gin.Context) {
@@ -2786,9 +2898,13 @@ func (s *Server) agentPollJobs(c *gin.Context) {
 	// Phase 2: Acquire candidates with SKIP LOCKED (short transaction)
 	candidates := make([]models.TaskJob, 0, req.Limit)
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		return tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("manager_id = ? AND status = ? AND scheduled_at <= ?", managerID, models.JobStatusPending, now).
-			Order("priority desc").Order("scheduled_at asc").Limit(req.Limit).Find(&candidates).Error
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("task_jobs.manager_id = ? AND task_jobs.status = ? AND task_jobs.scheduled_at <= ?", managerID, models.JobStatusPending, now)
+		if len(req.UserTypes) > 0 {
+			query = query.Joins("JOIN users ON users.id = task_jobs.user_id").
+				Where("users.user_type IN ?", req.UserTypes)
+		}
+		return query.Order("task_jobs.priority desc").Order("task_jobs.scheduled_at asc").Limit(req.Limit).Find(&candidates).Error
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取任务失败"})
@@ -3825,9 +3941,11 @@ func (s *Server) superListAuditLogs(c *gin.Context) {
 	// Only return logs relevant to the super-admin perspective:
 	// 1. All operations performed by super admins
 	// 2. Manager redeeming renewal keys
+	// 3. Manager configuring duiyi/blogger answers
 	baseQuery := s.db.Model(&models.AuditLog{}).Where(
-		"(actor_type = ? OR (actor_type = ? AND action = ?))",
-		models.ActorTypeSuper, models.ActorTypeManager, "redeem_manager_renewal_key",
+		"(actor_type = ? OR (actor_type = ? AND action IN ?))",
+		models.ActorTypeSuper, models.ActorTypeManager,
+		[]string{"redeem_manager_renewal_key", "set_blogger_answer", "set_duiyi_answer"},
 	)
 
 	if action != "" {
@@ -3948,10 +4066,30 @@ var duiyiValidWindows = map[string]bool{
 
 var duiyiWindowList = []string{"10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"}
 
+// currentDuiyiWindowStr returns the current duiyi window string (e.g. "14:00")
+// for the given UTC time, or "" if outside the 10:00-22:00 range.
+func currentDuiyiWindowStr(now time.Time) string {
+	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
+	bjHour := now.In(bjLoc).Hour()
+	if bjHour < 10 {
+		return ""
+	}
+	result := ""
+	for _, w := range duiyiWindowList {
+		h, _ := strconv.Atoi(strings.Split(w, ":")[0])
+		if bjHour >= h {
+			result = w
+		}
+	}
+	return result
+}
+
 func (s *Server) managerGetDuiyiAnswers(c *gin.Context) {
 	managerID := getUint(c, ctxActorIDKey)
 	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
-	todayBJ := time.Now().UTC().In(bjLoc).Format("2006-01-02")
+	now := time.Now().UTC()
+	todayBJ := now.In(bjLoc).Format("2006-01-02")
+	currentWindow := currentDuiyiWindowStr(now)
 
 	var cfg models.DuiyiAnswerConfig
 	err := s.db.Where("manager_id = ?", managerID).First(&cfg).Error
@@ -3974,8 +4112,9 @@ func (s *Server) managerGetDuiyiAnswers(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
-			"date":    dateOut,
-			"answers": answers,
+			"date":           dateOut,
+			"answers":        answers,
+			"current_window": currentWindow,
 		},
 	})
 }
@@ -3983,45 +4122,55 @@ func (s *Server) managerGetDuiyiAnswers(c *gin.Context) {
 func (s *Server) managerPutDuiyiAnswers(c *gin.Context) {
 	managerID := getUint(c, ctxActorIDKey)
 
-	var req putDuiyiAnswersRequest
+	var req putSingleWindowAnswerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "请求格式错误"})
 		return
 	}
 
-	// Validate
-	validated := make(map[string]any, 7)
-	for _, w := range duiyiWindowList {
-		validated[w] = nil
+	now := time.Now().UTC()
+	currentWindow := currentDuiyiWindowStr(now)
+	if currentWindow == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "当前不在对弈竞猜时间范围内 (10:00-22:00)"})
+		return
 	}
-	for key, valPtr := range req.Answers {
-		if !duiyiValidWindows[key] {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("无效的时间窗口: %s", key)})
-			return
-		}
-		if valPtr == nil {
-			validated[key] = nil
-		} else if *valPtr == "左" || *valPtr == "右" {
-			validated[key] = *valPtr
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("无效的答案值: %s（仅支持 左/右）", *valPtr)})
-			return
-		}
+	if req.Window != currentWindow {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("只能配置当前窗口 %s 的答案", currentWindow)})
+		return
+	}
+	if req.Answer != "左" && req.Answer != "右" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("无效的答案值: %s（仅支持 左/右）", req.Answer)})
+		return
 	}
 
 	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
-	todayBJ := time.Now().UTC().In(bjLoc).Format("2006-01-02")
-	now := time.Now().UTC()
+	todayBJ := now.In(bjLoc).Format("2006-01-02")
 
-	cfg := models.DuiyiAnswerConfig{
-		ManagerID: managerID,
-		Date:      todayBJ,
-		Answers:   datatypes.JSONMap(validated),
-		UpdatedAt: now,
+	// Read existing config and merge the current window answer
+	var existing models.DuiyiAnswerConfig
+	err := s.db.Where("manager_id = ?", managerID).First(&existing).Error
+
+	answers := make(map[string]any, 7)
+	for _, w := range duiyiWindowList {
+		answers[w] = nil
 	}
+	if err == nil && existing.Date == todayBJ {
+		stored := map[string]any(existing.Answers)
+		for _, w := range duiyiWindowList {
+			if v, ok := stored[w]; ok {
+				answers[w] = v
+			}
+		}
+	}
+	answers[req.Window] = req.Answer
 
-	result := s.db.Where("manager_id = ?", managerID).First(&models.DuiyiAnswerConfig{})
-	if result.Error != nil && errors.Is(result.Error, gorm.ErrRecordNotFound) {
+	if err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
+		cfg := models.DuiyiAnswerConfig{
+			ManagerID: managerID,
+			Date:      todayBJ,
+			Answers:   datatypes.JSONMap(answers),
+			UpdatedAt: now,
+		}
 		if err := s.db.Create(&cfg).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存失败"})
 			return
@@ -4031,7 +4180,7 @@ func (s *Server) managerPutDuiyiAnswers(c *gin.Context) {
 			Where("manager_id = ?", managerID).
 			Updates(map[string]any{
 				"date":       todayBJ,
-				"answers":    datatypes.JSONMap(validated),
+				"answers":    datatypes.JSONMap(answers),
 				"updated_at": now,
 			}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存失败"})
@@ -4039,10 +4188,952 @@ func (s *Server) managerPutDuiyiAnswers(c *gin.Context) {
 		}
 	}
 
+	s.audit(models.ActorTypeManager, managerID, "set_duiyi_answer", "duiyi_answer_config", managerID,
+		datatypes.JSONMap{"window": req.Window, "answer": req.Answer}, c.ClientIP())
+
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
-			"date":    todayBJ,
-			"answers": validated,
+			"date":           todayBJ,
+			"answers":        answers,
+			"current_window": currentWindow,
 		},
 	})
+}
+
+// ── Blogger Management (Super Admin) ─────────────────────
+
+func (s *Server) superCreateBlogger(c *gin.Context) {
+	var req createBloggerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "请求格式错误"})
+		return
+	}
+
+	now := time.Now().UTC()
+	blogger := models.Blogger{
+		Name:      strings.TrimSpace(req.Name),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.db.Create(&blogger).Error; err != nil {
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "UNIQUE") {
+			c.JSON(http.StatusConflict, gin.H{"detail": "博主名称已存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "创建博主失败"})
+		return
+	}
+
+	actorID := getUint(c, ctxActorIDKey)
+	s.audit(models.ActorTypeSuper, actorID, "create_blogger", "blogger", blogger.ID,
+		datatypes.JSONMap{"name": blogger.Name}, c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"id":         blogger.ID,
+			"name":       blogger.Name,
+			"created_at": blogger.CreatedAt,
+		},
+	})
+}
+
+func (s *Server) superListBloggers(c *gin.Context) {
+	var bloggers []models.Blogger
+	if err := s.db.Order("id asc").Find(&bloggers).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询博主失败"})
+		return
+	}
+
+	items := make([]gin.H, 0, len(bloggers))
+	for _, b := range bloggers {
+		items = append(items, gin.H{
+			"id":         b.ID,
+			"name":       b.Name,
+			"created_at": b.CreatedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+func (s *Server) superDeleteBlogger(c *gin.Context) {
+	bloggerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的博主ID"})
+		return
+	}
+
+	var blogger models.Blogger
+	if err := s.db.Where("id = ?", bloggerID).First(&blogger).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "博主不存在"})
+		return
+	}
+
+	// Clean up: reset users referencing this blogger
+	s.db.Model(&models.User{}).
+		Where("duiyi_blogger_id = ?", bloggerID).
+		Updates(map[string]any{
+			"duiyi_answer_source": "manager",
+			"duiyi_blogger_id":    nil,
+		})
+
+	// Delete blogger answer configs
+	s.db.Where("blogger_id = ?", bloggerID).Delete(&models.BloggerAnswerConfig{})
+
+	// Delete the blogger
+	if err := s.db.Delete(&blogger).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "删除博主失败"})
+		return
+	}
+
+	actorID := getUint(c, ctxActorIDKey)
+	s.audit(models.ActorTypeSuper, actorID, "delete_blogger", "blogger", uint(bloggerID),
+		datatypes.JSONMap{"name": blogger.Name}, c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{"data": "ok"})
+}
+
+// ── Blogger Answers (Manager) ────────────────────────────
+
+func (s *Server) managerListBloggers(c *gin.Context) {
+	var bloggers []models.Blogger
+	if err := s.db.Order("id asc").Find(&bloggers).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "查询博主失败"})
+		return
+	}
+
+	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
+	todayBJ := time.Now().UTC().In(bjLoc).Format("2006-01-02")
+
+	// Batch load today's blogger answer configs
+	bloggerIDs := make([]uint, 0, len(bloggers))
+	for _, b := range bloggers {
+		bloggerIDs = append(bloggerIDs, b.ID)
+	}
+	hasTodayMap := make(map[uint]bool, len(bloggers))
+	if len(bloggerIDs) > 0 {
+		var configs []models.BloggerAnswerConfig
+		s.db.Where("blogger_id IN ? AND date = ?", bloggerIDs, todayBJ).Find(&configs)
+		for _, cfg := range configs {
+			hasTodayMap[cfg.BloggerID] = true
+		}
+	}
+
+	items := make([]gin.H, 0, len(bloggers))
+	for _, b := range bloggers {
+		items = append(items, gin.H{
+			"id":                b.ID,
+			"name":              b.Name,
+			"has_today_answers": hasTodayMap[b.ID],
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+func (s *Server) managerGetBloggerAnswers(c *gin.Context) {
+	bloggerID, err := strconv.ParseUint(c.Param("blogger_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的博主ID"})
+		return
+	}
+
+	var blogger models.Blogger
+	if err := s.db.Where("id = ?", bloggerID).First(&blogger).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "博主不存在"})
+		return
+	}
+
+	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
+	now := time.Now().UTC()
+	todayBJ := now.In(bjLoc).Format("2006-01-02")
+	currentWindow := currentDuiyiWindowStr(now)
+
+	answers := make(map[string]any, 7)
+	for _, w := range duiyiWindowList {
+		answers[w] = nil
+	}
+
+	var cfg models.BloggerAnswerConfig
+	if err := s.db.Where("blogger_id = ? AND date = ?", bloggerID, todayBJ).First(&cfg).Error; err == nil {
+		stored := map[string]any(cfg.Answers)
+		for _, w := range duiyiWindowList {
+			if v, ok := stored[w]; ok {
+				answers[w] = v
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"blogger_id":     bloggerID,
+			"blogger_name":   blogger.Name,
+			"date":           todayBJ,
+			"answers":        answers,
+			"current_window": currentWindow,
+		},
+	})
+}
+
+func (s *Server) managerPutBloggerAnswer(c *gin.Context) {
+	managerID := getUint(c, ctxActorIDKey)
+	bloggerID, err := strconv.ParseUint(c.Param("blogger_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的博主ID"})
+		return
+	}
+
+	var req putSingleWindowAnswerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "请求格式错误"})
+		return
+	}
+
+	now := time.Now().UTC()
+	currentWindow := currentDuiyiWindowStr(now)
+	if currentWindow == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "当前不在对弈竞猜时间范围内 (10:00-22:00)"})
+		return
+	}
+	if req.Window != currentWindow {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("只能配置当前窗口 %s 的答案", currentWindow)})
+		return
+	}
+	if req.Answer != "左" && req.Answer != "右" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("无效的答案值: %s（仅支持 左/右）", req.Answer)})
+		return
+	}
+
+	var blogger models.Blogger
+	if err := s.db.Where("id = ?", bloggerID).First(&blogger).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "博主不存在"})
+		return
+	}
+
+	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
+	todayBJ := now.In(bjLoc).Format("2006-01-02")
+
+	// Read existing config and merge
+	var existing models.BloggerAnswerConfig
+	dbErr := s.db.Where("blogger_id = ? AND date = ?", bloggerID, todayBJ).First(&existing).Error
+
+	answers := make(map[string]any, 7)
+	for _, w := range duiyiWindowList {
+		answers[w] = nil
+	}
+	if dbErr == nil {
+		stored := map[string]any(existing.Answers)
+		for _, w := range duiyiWindowList {
+			if v, ok := stored[w]; ok {
+				answers[w] = v
+			}
+		}
+	}
+	answers[req.Window] = req.Answer
+
+	if dbErr != nil && errors.Is(dbErr, gorm.ErrRecordNotFound) {
+		cfg := models.BloggerAnswerConfig{
+			BloggerID: uint(bloggerID),
+			Date:      todayBJ,
+			Answers:   datatypes.JSONMap(answers),
+			UpdatedBy: managerID,
+			UpdatedAt: now,
+		}
+		if err := s.db.Create(&cfg).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存失败"})
+			return
+		}
+	} else {
+		if err := s.db.Model(&models.BloggerAnswerConfig{}).
+			Where("blogger_id = ? AND date = ?", bloggerID, todayBJ).
+			Updates(map[string]any{
+				"answers":    datatypes.JSONMap(answers),
+				"updated_by": managerID,
+				"updated_at": now,
+			}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存失败"})
+			return
+		}
+	}
+
+	s.audit(models.ActorTypeManager, managerID, "set_blogger_answer", "blogger_answer_config", uint(bloggerID),
+		datatypes.JSONMap{
+			"blogger_id":   bloggerID,
+			"blogger_name": blogger.Name,
+			"window":       req.Window,
+			"answer":       req.Answer,
+		}, c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"date":           todayBJ,
+			"answers":        answers,
+			"current_window": currentWindow,
+		},
+	})
+}
+
+// ── User Duiyi Answer Source ─────────────────────────────
+
+func (s *Server) userGetDuiyiAnswerSources(c *gin.Context) {
+	userID := getUint(c, ctxUserIDKey)
+
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
+		return
+	}
+
+	var bloggers []models.Blogger
+	s.db.Order("id asc").Find(&bloggers)
+
+	bloggerItems := make([]gin.H, 0, len(bloggers))
+	for _, b := range bloggers {
+		bloggerItems = append(bloggerItems, gin.H{
+			"id":   b.ID,
+			"name": b.Name,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"current_source":     user.DuiyiAnswerSource,
+			"current_blogger_id": user.DuiyiBloggerID,
+			"bloggers":           bloggerItems,
+		},
+	})
+}
+
+func (s *Server) userPutDuiyiAnswerSource(c *gin.Context) {
+	userID := getUint(c, ctxUserIDKey)
+
+	var req putDuiyiAnswerSourceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "请求格式错误"})
+		return
+	}
+
+	updates := map[string]any{
+		"duiyi_answer_source": req.Source,
+		"updated_at":          time.Now().UTC(),
+	}
+
+	if req.Source == "blogger" {
+		if req.BloggerID == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "选择博主答案时必须指定博主"})
+			return
+		}
+		var blogger models.Blogger
+		if err := s.db.Where("id = ?", *req.BloggerID).First(&blogger).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "指定的博主不存在"})
+			return
+		}
+		updates["duiyi_blogger_id"] = *req.BloggerID
+	} else {
+		updates["duiyi_blogger_id"] = nil
+	}
+
+	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"source":     req.Source,
+			"blogger_id": req.BloggerID,
+		},
+	})
+}
+
+// ── Friend system handlers ───────────────────────────────
+
+// requireJingzhiUser loads the user from DB and checks user_type == jingzhi.
+// Returns the user on success, or writes an error response and returns nil.
+func (s *Server) requireJingzhiUser(c *gin.Context) *models.User {
+	userID := getUint(c, ctxUserIDKey)
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户不存在"})
+		return nil
+	}
+	if user.UserType != models.UserTypeJingzhi {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "仅精致日常用户可使用此功能"})
+		return nil
+	}
+	return &user
+}
+
+func (s *Server) userListFriends(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	var friendships []models.Friendship
+	if err := s.db.Where(
+		"(user_id = ? OR friend_id = ?) AND status = ?",
+		user.ID, user.ID, models.FriendshipStatusAccepted,
+	).Find(&friendships).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取好友列表失败"})
+		return
+	}
+
+	// Collect friend user IDs
+	friendIDs := make([]uint, 0, len(friendships))
+	for _, f := range friendships {
+		if f.UserID == user.ID {
+			friendIDs = append(friendIDs, f.FriendID)
+		} else {
+			friendIDs = append(friendIDs, f.UserID)
+		}
+	}
+
+	if len(friendIDs) == 0 {
+		c.JSON(http.StatusOK, gin.H{"data": []any{}})
+		return
+	}
+
+	var friends []models.User
+	if err := s.db.Select("id, account_no, login_id, username, server, user_type, status").
+		Where("id IN ?", friendIDs).Find(&friends).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取好友信息失败"})
+		return
+	}
+
+	// Build friendship ID map for deletion reference
+	friendshipMap := make(map[uint]uint) // friend_user_id -> friendship_id
+	for _, f := range friendships {
+		if f.UserID == user.ID {
+			friendshipMap[f.FriendID] = f.ID
+		} else {
+			friendshipMap[f.UserID] = f.ID
+		}
+	}
+
+	result := make([]gin.H, 0, len(friends))
+	for _, f := range friends {
+		result = append(result, gin.H{
+			"friendship_id": friendshipMap[f.ID],
+			"user_id":       f.ID,
+			"account_no":    f.AccountNo,
+			"login_id":      f.LoginID,
+			"username":      f.Username,
+			"server":        f.Server,
+			"status":        f.Status,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func (s *Server) userListFriendRequests(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	var requests []models.Friendship
+	if err := s.db.Where(
+		"friend_id = ? AND status = ?",
+		user.ID, models.FriendshipStatusPending,
+	).Order("created_at desc").Find(&requests).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取好友请求失败"})
+		return
+	}
+
+	if len(requests) == 0 {
+		c.JSON(http.StatusOK, gin.H{"data": []any{}})
+		return
+	}
+
+	// Load requester info
+	requesterIDs := make([]uint, 0, len(requests))
+	for _, r := range requests {
+		requesterIDs = append(requesterIDs, r.UserID)
+	}
+	var requesters []models.User
+	if err := s.db.Select("id, account_no, login_id, username, server").
+		Where("id IN ?", requesterIDs).Find(&requesters).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取请求方信息失败"})
+		return
+	}
+	requesterMap := make(map[uint]models.User)
+	for _, u := range requesters {
+		requesterMap[u.ID] = u
+	}
+
+	result := make([]gin.H, 0, len(requests))
+	for _, r := range requests {
+		u := requesterMap[r.UserID]
+		result = append(result, gin.H{
+			"id":         r.ID,
+			"user_id":    r.UserID,
+			"account_no": u.AccountNo,
+			"login_id":   u.LoginID,
+			"username":   u.Username,
+			"server":     u.Server,
+			"created_at": r.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func (s *Server) userSendFriendRequest(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	var req userFriendRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	// Find the friend by account_no
+	var friend models.User
+	if err := s.db.Where("account_no = ?", req.FriendAccountNo).First(&friend).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "目标用户不存在"})
+		return
+	}
+
+	// Validation
+	if friend.ID == user.ID {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "不能添加自己为好友"})
+		return
+	}
+	if friend.ManagerID != user.ManagerID {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "只能添加同一管理员下的用户为好友"})
+		return
+	}
+	if friend.UserType != models.UserTypeJingzhi {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "只能添加精致日常用户为好友"})
+		return
+	}
+
+	// Check for existing friendship/pending request (in both directions)
+	var existing models.Friendship
+	err := s.db.Where(
+		"((user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)) AND status IN ?",
+		user.ID, friend.ID, friend.ID, user.ID,
+		[]string{models.FriendshipStatusPending, models.FriendshipStatusAccepted},
+	).First(&existing).Error
+	if err == nil {
+		if existing.Status == models.FriendshipStatusAccepted {
+			c.JSON(http.StatusConflict, gin.H{"detail": "已经是好友"})
+		} else {
+			c.JSON(http.StatusConflict, gin.H{"detail": "已有待处理的好友请求"})
+		}
+		return
+	}
+
+	now := time.Now().UTC()
+	friendship := models.Friendship{
+		ManagerID: user.ManagerID,
+		UserID:    user.ID,
+		FriendID:  friend.ID,
+		Status:    models.FriendshipStatusPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.db.Create(&friendship).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "发送好友请求失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, user.ID, "friend_request_send", "friendship", friendship.ID, datatypes.JSONMap{"friend_id": friend.ID}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": friendship.ID, "status": friendship.Status}})
+}
+
+func (s *Server) userAcceptFriendRequest(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的ID"})
+		return
+	}
+
+	var friendship models.Friendship
+	if err := s.db.Where("id = ? AND friend_id = ? AND status = ?", id, user.ID, models.FriendshipStatusPending).First(&friendship).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "好友请求不存在或已处理"})
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := s.db.Model(&friendship).Updates(map[string]any{
+		"status":     models.FriendshipStatusAccepted,
+		"updated_at": now,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "接受好友请求失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, user.ID, "friend_request_accept", "friendship", friendship.ID, datatypes.JSONMap{"user_id": friendship.UserID}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": friendship.ID, "status": models.FriendshipStatusAccepted}})
+}
+
+func (s *Server) userRejectFriendRequest(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的ID"})
+		return
+	}
+
+	var friendship models.Friendship
+	if err := s.db.Where("id = ? AND friend_id = ? AND status = ?", id, user.ID, models.FriendshipStatusPending).First(&friendship).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "好友请求不存在或已处理"})
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := s.db.Model(&friendship).Updates(map[string]any{
+		"status":     models.FriendshipStatusRejected,
+		"updated_at": now,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "拒绝好友请求失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, user.ID, "friend_request_reject", "friendship", friendship.ID, datatypes.JSONMap{"user_id": friendship.UserID}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": friendship.ID, "status": models.FriendshipStatusRejected}})
+}
+
+func (s *Server) userDeleteFriend(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的ID"})
+		return
+	}
+
+	var friendship models.Friendship
+	if err := s.db.Where(
+		"id = ? AND (user_id = ? OR friend_id = ?) AND status = ?",
+		id, user.ID, user.ID, models.FriendshipStatusAccepted,
+	).First(&friendship).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "好友关系不存在"})
+		return
+	}
+
+	if err := s.db.Delete(&friendship).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "删除好友失败"})
+		return
+	}
+
+	friendID := friendship.FriendID
+	if friendID == user.ID {
+		friendID = friendship.UserID
+	}
+	s.audit(models.ActorTypeUser, user.ID, "friend_delete", "friendship", friendship.ID, datatypes.JSONMap{"friend_id": friendID}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
+}
+
+func (s *Server) userListFriendCandidates(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	// Get already-connected user IDs (accepted or pending)
+	var existingFriendships []models.Friendship
+	s.db.Where(
+		"(user_id = ? OR friend_id = ?) AND status IN ?",
+		user.ID, user.ID,
+		[]string{models.FriendshipStatusPending, models.FriendshipStatusAccepted},
+	).Find(&existingFriendships)
+
+	excludeIDs := map[uint]bool{user.ID: true}
+	for _, f := range existingFriendships {
+		excludeIDs[f.UserID] = true
+		excludeIDs[f.FriendID] = true
+	}
+
+	excludeList := make([]uint, 0, len(excludeIDs))
+	for id := range excludeIDs {
+		excludeList = append(excludeList, id)
+	}
+
+	var candidates []models.User
+	if err := s.db.Select("id, account_no, login_id, username, server").
+		Where("manager_id = ? AND user_type = ? AND status = ? AND id NOT IN ?",
+			user.ManagerID, models.UserTypeJingzhi, models.UserStatusActive, excludeList,
+		).Find(&candidates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取候选好友列表失败"})
+		return
+	}
+
+	result := make([]gin.H, 0, len(candidates))
+	for _, u := range candidates {
+		result = append(result, gin.H{
+			"user_id":    u.ID,
+			"account_no": u.AccountNo,
+			"login_id":   u.LoginID,
+			"username":   u.Username,
+			"server":     u.Server,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// ── Team Yuhun handlers ───────────────────────────────
+
+func (s *Server) userSendTeamYuhunRequest(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	var req userTeamYuhunCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	// Parse scheduled_at
+	scheduledAt, err := time.Parse(time.RFC3339, req.ScheduledAt)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "预约时间格式无效，使用 RFC3339 格式"})
+		return
+	}
+	if !scheduledAt.After(time.Now().UTC()) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "预约时间必须在未来"})
+		return
+	}
+
+	// Check friend exists and is a friend
+	var friendship models.Friendship
+	if err := s.db.Where(
+		"((user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)) AND status = ?",
+		user.ID, req.FriendID, req.FriendID, user.ID, models.FriendshipStatusAccepted,
+	).First(&friendship).Error; err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "对方不是您的好友"})
+		return
+	}
+
+	// Check for existing pending request between these two users
+	var existingCount int64
+	s.db.Model(&models.TeamYuhunRequest{}).Where(
+		"((requester_id = ? AND receiver_id = ?) OR (requester_id = ? AND receiver_id = ?)) AND status IN ?",
+		user.ID, req.FriendID, req.FriendID, user.ID,
+		[]string{models.TeamYuhunStatusPending, models.TeamYuhunStatusAccepted},
+	).Count(&existingCount)
+	if existingCount > 0 {
+		c.JSON(http.StatusConflict, gin.H{"detail": "已有待处理或已接受的组队请求"})
+		return
+	}
+
+	now := time.Now().UTC()
+	teamReq := models.TeamYuhunRequest{
+		ManagerID:       user.ManagerID,
+		RequesterID:     user.ID,
+		ReceiverID:      req.FriendID,
+		ScheduledAt:     scheduledAt.UTC(),
+		Status:          models.TeamYuhunStatusPending,
+		RequesterRole:   req.Role,
+		RequesterLineup: datatypes.JSONMap(req.Lineup),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := s.db.Create(&teamReq).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "发送组队请求失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, user.ID, "team_yuhun_request_send", "team_yuhun_request", teamReq.ID,
+		datatypes.JSONMap{"receiver_id": req.FriendID, "role": req.Role, "scheduled_at": req.ScheduledAt}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": teamReq.ID, "status": teamReq.Status}})
+}
+
+func (s *Server) userListTeamYuhunRequests(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	var requests []models.TeamYuhunRequest
+	if err := s.db.Where(
+		"requester_id = ? OR receiver_id = ?", user.ID, user.ID,
+	).Order("created_at desc").Find(&requests).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取组队请求列表失败"})
+		return
+	}
+
+	// Collect all related user IDs
+	userIDSet := make(map[uint]bool)
+	for _, r := range requests {
+		userIDSet[r.RequesterID] = true
+		userIDSet[r.ReceiverID] = true
+	}
+	userIDs := make([]uint, 0, len(userIDSet))
+	for id := range userIDSet {
+		userIDs = append(userIDs, id)
+	}
+
+	userMap := make(map[uint]models.User)
+	if len(userIDs) > 0 {
+		var users []models.User
+		s.db.Select("id, account_no, login_id, username, server").Where("id IN ?", userIDs).Find(&users)
+		for _, u := range users {
+			userMap[u.ID] = u
+		}
+	}
+
+	result := make([]gin.H, 0, len(requests))
+	for _, r := range requests {
+		requester := userMap[r.RequesterID]
+		receiver := userMap[r.ReceiverID]
+		direction := "sent"
+		if r.ReceiverID == user.ID {
+			direction = "received"
+		}
+		result = append(result, gin.H{
+			"id":           r.ID,
+			"direction":    direction,
+			"status":       r.Status,
+			"scheduled_at": r.ScheduledAt,
+			"requester": gin.H{
+				"user_id":    r.RequesterID,
+				"account_no": requester.AccountNo,
+				"login_id":   requester.LoginID,
+				"username":   requester.Username,
+				"server":     requester.Server,
+				"role":       r.RequesterRole,
+				"lineup":     r.RequesterLineup,
+			},
+			"receiver": gin.H{
+				"user_id":    r.ReceiverID,
+				"account_no": receiver.AccountNo,
+				"login_id":   receiver.LoginID,
+				"username":   receiver.Username,
+				"server":     receiver.Server,
+				"role":       r.ReceiverRole,
+				"lineup":     r.ReceiverLineup,
+			},
+			"created_at": r.CreatedAt,
+			"updated_at": r.UpdatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func (s *Server) userAcceptTeamYuhunRequest(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的ID"})
+		return
+	}
+
+	var req userTeamYuhunAcceptRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	var teamReq models.TeamYuhunRequest
+	if err := s.db.Where("id = ? AND receiver_id = ? AND status = ?", id, user.ID, models.TeamYuhunStatusPending).First(&teamReq).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "组队请求不存在或已处理"})
+		return
+	}
+
+	// Roles must be different
+	if req.Role == teamReq.RequesterRole {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "角色不能与发起方相同，需要一个司机一个打手"})
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := s.db.Model(&teamReq).Updates(map[string]any{
+		"status":          models.TeamYuhunStatusAccepted,
+		"receiver_role":   req.Role,
+		"receiver_lineup": datatypes.JSONMap(req.Lineup),
+		"updated_at":      now,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "接受组队请求失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, user.ID, "team_yuhun_request_accept", "team_yuhun_request", teamReq.ID,
+		datatypes.JSONMap{"role": req.Role}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": teamReq.ID, "status": models.TeamYuhunStatusAccepted}})
+}
+
+func (s *Server) userRejectTeamYuhunRequest(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的ID"})
+		return
+	}
+
+	var teamReq models.TeamYuhunRequest
+	if err := s.db.Where("id = ? AND receiver_id = ? AND status = ?", id, user.ID, models.TeamYuhunStatusPending).First(&teamReq).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "组队请求不存在或已处理"})
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := s.db.Model(&teamReq).Updates(map[string]any{
+		"status":     models.TeamYuhunStatusRejected,
+		"updated_at": now,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "拒绝组队请求失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, user.ID, "team_yuhun_request_reject", "team_yuhun_request", teamReq.ID, datatypes.JSONMap{}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": teamReq.ID, "status": models.TeamYuhunStatusRejected}})
+}
+
+func (s *Server) userCancelTeamYuhunRequest(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的ID"})
+		return
+	}
+
+	var teamReq models.TeamYuhunRequest
+	if err := s.db.Where("id = ? AND requester_id = ? AND status IN ?", id, user.ID,
+		[]string{models.TeamYuhunStatusPending, models.TeamYuhunStatusAccepted},
+	).First(&teamReq).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "组队请求不存在或无法取消"})
+		return
+	}
+
+	if err := s.db.Delete(&teamReq).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "取消组队请求失败"})
+		return
+	}
+
+	s.audit(models.ActorTypeUser, user.ID, "team_yuhun_request_cancel", "team_yuhun_request", teamReq.ID,
+		datatypes.JSONMap{"receiver_id": teamReq.ReceiverID}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
 }

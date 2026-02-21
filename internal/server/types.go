@@ -11,7 +11,8 @@ type loginRequest struct {
 }
 
 type createRenewalKeyRequest struct {
-	DurationDays int `json:"duration_days" binding:"required,min=1,max=3650"`
+	DurationDays int    `json:"duration_days" binding:"required,min=1,max=3650"`
+	ManagerType  string `json:"manager_type" binding:"required,oneof=daily duiyi shuaka all"`
 }
 
 type patchCodeStatusRequest struct {
@@ -28,12 +29,12 @@ type managerPutAliasRequest struct {
 
 type createActivationCodeRequest struct {
 	DurationDays int    `json:"duration_days" binding:"required,min=1,max=3650"`
-	UserType     string `json:"user_type" binding:"required,oneof=daily duiyi shuaka"`
+	UserType     string `json:"user_type" binding:"required,oneof=daily duiyi shuaka foster jingzhi"`
 }
 
 type quickCreateUserRequest struct {
 	DurationDays int    `json:"duration_days" binding:"required,min=1,max=3650"`
-	UserType     string `json:"user_type" binding:"required,oneof=daily duiyi shuaka"`
+	UserType     string `json:"user_type" binding:"required,oneof=daily duiyi shuaka foster jingzhi"`
 }
 
 type putTaskConfigRequest struct {
@@ -47,9 +48,14 @@ type managerPatchUserLifecycleRequest struct {
 	ArchiveStatus string `json:"archive_status"`
 }
 
+type managerPatchUserSettingsRequest struct {
+	CanViewLogs *bool `json:"can_view_logs"`
+}
+
 type superPatchManagerLifecycleRequest struct {
-	ExpiresAt  string `json:"expires_at"`
-	ExtendDays int    `json:"extend_days"`
+	ExpiresAt   string `json:"expires_at"`
+	ExtendDays  int    `json:"extend_days"`
+	ManagerType string `json:"manager_type" binding:"omitempty,oneof=daily duiyi shuaka all"`
 }
 
 type superResetManagerPasswordRequest struct {
@@ -81,9 +87,10 @@ type agentLoginRequest struct {
 }
 
 type agentPollJobsRequest struct {
-	NodeID       string `json:"node_id" binding:"required,min=3,max=128"`
-	Limit        int    `json:"limit"`
-	LeaseSeconds int    `json:"lease_seconds"`
+	NodeID       string   `json:"node_id" binding:"required,min=3,max=128"`
+	Limit        int      `json:"limit"`
+	LeaseSeconds int      `json:"lease_seconds"`
+	UserTypes    []string `json:"user_types"` // 可选，按用户类型过滤
 }
 
 type agentJobUpdateRequest struct {
@@ -190,4 +197,39 @@ type agentScanFailRequest struct {
 
 type putDuiyiAnswersRequest struct {
 	Answers map[string]*string `json:"answers" binding:"required"`
+}
+
+// Single-window answer request (used after time-window restriction)
+type putSingleWindowAnswerRequest struct {
+	Window string `json:"window" binding:"required"`
+	Answer string `json:"answer" binding:"required"`
+}
+
+type createBloggerRequest struct {
+	Name string `json:"name" binding:"required,min=1,max=64"`
+}
+
+type putDuiyiAnswerSourceRequest struct {
+	Source    string `json:"source" binding:"required,oneof=manager blogger"`
+	BloggerID *uint `json:"blogger_id"`
+}
+
+// ── Friend request types ───────────────────────────────
+
+type userFriendRequest struct {
+	FriendAccountNo string `json:"friend_account_no" binding:"required,min=6,max=64"`
+}
+
+// ── Team Yuhun request types ───────────────────────────
+
+type userTeamYuhunCreateRequest struct {
+	FriendID    uint           `json:"friend_id" binding:"required"`
+	ScheduledAt string         `json:"scheduled_at" binding:"required"`
+	Role        string         `json:"role" binding:"required,oneof=driver attacker"`
+	Lineup      map[string]any `json:"lineup"`
+}
+
+type userTeamYuhunAcceptRequest struct {
+	Role   string         `json:"role" binding:"required,oneof=driver attacker"`
+	Lineup map[string]any `json:"lineup"`
 }

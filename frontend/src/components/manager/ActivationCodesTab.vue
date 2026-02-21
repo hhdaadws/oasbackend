@@ -128,7 +128,7 @@
         <el-form-item label="激活天数">
           <el-input-number v-model="activationForm.duration_days" :min="1" :max="3650" class="w-full" />
         </el-form-item>
-        <el-form-item label="类型">
+        <el-form-item v-if="isAllType" label="类型">
           <el-select v-model="activationForm.user_type" class="w-full">
             <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
@@ -159,7 +159,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref, watch } from "vue";
+import { onMounted, reactive, ref, computed, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { managerApi, parseApiError } from "../../lib/http";
 import {
@@ -181,7 +181,13 @@ const props = defineProps({
     type: String,
     default: "",
   },
+  managerType: {
+    type: String,
+    default: "all",
+  },
 });
+
+const isAllType = computed(() => props.managerType === "all");
 
 const loading = reactive({
   activation: false,
@@ -224,12 +230,13 @@ async function createActivationCode() {
   generatedCodes.value = [];
   try {
     const total = Math.max(1, Math.min(50, activationForm.count || 1));
+    const userType = isAllType.value ? activationForm.user_type : props.managerType;
     for (let i = 0; i < total; i++) {
       const response = await managerApi.createActivationCode(props.token, {
         duration_days: activationForm.duration_days,
-        user_type: activationForm.user_type,
+        user_type: userType,
       });
-      generatedCodes.value.push({ code: response.code || "", user_type: response.user_type || activationForm.user_type });
+      generatedCodes.value.push({ code: response.code || "", user_type: response.user_type || userType });
     }
     latestActivationCode.value = generatedCodes.value[0]?.code || "";
     latestActivationType.value = generatedCodes.value[0]?.user_type || activationForm.user_type;

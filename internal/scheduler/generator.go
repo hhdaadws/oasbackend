@@ -202,6 +202,40 @@ func (g *Generator) runOnce(ctx context.Context) {
 		duiyiAnswerMap[dc.ManagerID] = map[string]any(dc.Answers)
 	}
 
+	// Batch preload: blogger answer configs for users who selected a blogger source
+	bloggerIDSet := make(map[uint]struct{})
+	for _, u := range users {
+		if u.DuiyiAnswerSource == "blogger" && u.DuiyiBloggerID != nil {
+			bloggerIDSet[*u.DuiyiBloggerID] = struct{}{}
+		}
+	}
+	bloggerAnswerMap := make(map[uint]map[string]any)
+	if len(bloggerIDSet) > 0 {
+		bloggerIDs := make([]uint, 0, len(bloggerIDSet))
+		for bid := range bloggerIDSet {
+			bloggerIDs = append(bloggerIDs, bid)
+		}
+		var bloggerConfigs []models.BloggerAnswerConfig
+		if err := g.db.Where("blogger_id IN ? AND date = ?", bloggerIDs, todayBJ).
+			Find(&bloggerConfigs).Error; err != nil {
+			slog.Warn("preload blogger answer configs failed", "error", err)
+		} else {
+			for _, bc := range bloggerConfigs {
+				bloggerAnswerMap[bc.BloggerID] = map[string]any(bc.Answers)
+			}
+		}
+	}
+
+	// Build per-user duiyi answers: use blogger answers if user selected a blogger, else manager answers
+	userDuiyiAnswers := make(map[uint]map[string]any, len(users))
+	for _, u := range users {
+		if u.DuiyiAnswerSource == "blogger" && u.DuiyiBloggerID != nil {
+			userDuiyiAnswers[u.ID] = bloggerAnswerMap[*u.DuiyiBloggerID]
+		} else {
+			userDuiyiAnswers[u.ID] = duiyiAnswerMap[u.ManagerID]
+		}
+	}
+
 	workers := g.cfg.SchedulerWorkers
 	if workers <= 0 {
 		workers = 4
@@ -228,9 +262,19 @@ func (g *Generator) runOnce(ctx context.Context) {
 			}
 			generated += userGenerated
 			mu.Unlock()
-		}(user, cfg, userJobCounts, duiyiAnswerMap[user.ManagerID])
+		}(user, cfg, userJobCounts, userDuiyiAnswers[user.ID])
 	}
 	wg.Wait()
+
+	// Generate team yuhun tasks from accepted requests
+	teamGenerated, teamErr := g.generateTeamYuhunJobs(ctx, now)
+	if teamErr != nil {
+		slog.Warn("generate team yuhun jobs failed", "error", teamErr)
+		if runErr == nil {
+			runErr = teamErr
+		}
+	}
+	generated += teamGenerated
 
 	g.updateStats(now, generated, scanned, runErr)
 }
@@ -592,4 +636,93 @@ func (g *Generator) expireStaleDuiyiJobs(now time.Time) (int64, error) {
 	}
 
 	return int64(len(staleIDs)), nil
+}
+
+// generateTeamYuhunJobs finds accepted TeamYuhunRequests whose scheduled_at
+// has passed and creates paired TaskJobs for both players.
+func (g *Generator) generateTeamYuhunJobs(ctx context.Context, now time.Time) (int, error) {
+	var requests []models.TeamYuhunRequest
+	if err := g.db.Where("status = ? AND scheduled_at <= ?",
+		models.TeamYuhunStatusAccepted, now,
+	).Find(&requests).Error; err != nil {
+		return 0, err
+	}
+	if len(requests) == 0 {
+		return 0, nil
+	}
+
+	generated := 0
+	for _, req := range requests {
+		// Redis dedup slot
+		slotKey := fmt.Sprintf("team_yuhun:%d", req.ID)
+		acquired, err := g.store.AcquireScheduleSlot(ctx, req.ManagerID, req.RequesterID, "组队御魂", slotKey, 24*time.Hour)
+		if err != nil || !acquired {
+			continue
+		}
+
+		// Create job for requester
+		requesterPayload := datatypes.JSONMap{
+			"user_id":           req.RequesterID,
+			"source":            "team_yuhun",
+			"team_request_id":   req.ID,
+			"role":              req.RequesterRole,
+			"partner_user_id":   req.ReceiverID,
+			"lineup":            map[string]any(req.RequesterLineup),
+		}
+		requesterJob := models.TaskJob{
+			ManagerID:   req.ManagerID,
+			UserID:      req.RequesterID,
+			TaskType:    "组队御魂",
+			Payload:     requesterPayload,
+			Priority:    85,
+			ScheduledAt: now,
+			Status:      models.JobStatusPending,
+			MaxAttempts: 1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+
+		// Create job for receiver
+		receiverPayload := datatypes.JSONMap{
+			"user_id":           req.ReceiverID,
+			"source":            "team_yuhun",
+			"team_request_id":   req.ID,
+			"role":              req.ReceiverRole,
+			"partner_user_id":   req.RequesterID,
+			"lineup":            map[string]any(req.ReceiverLineup),
+		}
+		receiverJob := models.TaskJob{
+			ManagerID:   req.ManagerID,
+			UserID:      req.ReceiverID,
+			TaskType:    "组队御魂",
+			Payload:     receiverPayload,
+			Priority:    85,
+			ScheduledAt: now,
+			Status:      models.JobStatusPending,
+			MaxAttempts: 1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+
+		if err := g.db.Create(&requesterJob).Error; err != nil {
+			slog.Warn("create team yuhun requester job failed", "request_id", req.ID, "error", err)
+			continue
+		}
+		if err := g.db.Create(&receiverJob).Error; err != nil {
+			slog.Warn("create team yuhun receiver job failed", "request_id", req.ID, "error", err)
+			continue
+		}
+
+		// Mark request as completed
+		if err := g.db.Model(&req).Updates(map[string]any{
+			"status":     models.TeamYuhunStatusCompleted,
+			"updated_at": now,
+		}).Error; err != nil {
+			slog.Warn("update team yuhun request status failed", "request_id", req.ID, "error", err)
+		}
+
+		generated += 2
+	}
+
+	return generated, nil
 }

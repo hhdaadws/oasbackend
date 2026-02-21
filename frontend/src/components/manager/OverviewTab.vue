@@ -48,6 +48,10 @@
             </div>
           </div>
           <div class="stat-item">
+            <span class="stat-label">类型</span>
+            <strong class="stat-value">{{ managerTypeLabel(managerProfile.manager_type) }}</strong>
+          </div>
+          <div class="stat-item">
             <span class="stat-label">到期时间</span>
             <strong class="stat-value stat-time">{{ formatTime(managerProfile.expires_at) }}</strong>
           </div>
@@ -84,7 +88,7 @@
 import { onMounted, reactive, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { managerApi, parseApiError } from "../../lib/http";
-import { formatTime } from "../../lib/helpers";
+import { formatTime, managerTypeLabel } from "../../lib/helpers";
 
 const props = defineProps({
   token: {
@@ -93,7 +97,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(["profile-updated"]);
+const emit = defineEmits(["profile-updated", "manager-type-changed"]);
 
 const loading = reactive({
   overview: false,
@@ -108,6 +112,7 @@ const managerProfile = reactive({
   id: 0,
   username: "",
   alias: "",
+  manager_type: "all",
   expires_at: "",
   expired: false,
 });
@@ -157,9 +162,11 @@ async function loadManagerProfile() {
     managerProfile.id = response.id || 0;
     managerProfile.username = response.username || "";
     managerProfile.alias = response.alias || "";
+    managerProfile.manager_type = response.manager_type || "all";
     managerProfile.expires_at = response.expires_at || "";
     managerProfile.expired = response.expired === true;
     aliasForm.alias = managerProfile.alias;
+    emit("manager-type-changed", managerProfile.manager_type);
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {

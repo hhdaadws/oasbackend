@@ -6,9 +6,11 @@ import (
 )
 
 const (
-	UserTypeDaily  = "daily"
-	UserTypeDuiyi  = "duiyi"
-	UserTypeShuaka = "shuaka"
+	UserTypeDaily   = "daily"
+	UserTypeDuiyi   = "duiyi"
+	UserTypeShuaka  = "shuaka"
+	UserTypeFoster  = "foster"
+	UserTypeJingzhi = "jingzhi"
 )
 
 var allTaskOrder = []string{
@@ -45,6 +47,7 @@ var allTaskOrder = []string{
 	"起号_式神养成",
 	"起号_升级饭盒",
 	"领取成就奖励",
+	"组队御魂",
 }
 
 // daily task pool: aligned with local DEFAULT_TASK_CONFIG.
@@ -109,6 +112,65 @@ var duiyiTaskOrder = []string{
 	"对弈竞猜",
 }
 
+// foster task pool: same as daily.
+var fosterTaskOrder = []string{
+	"寄养",
+	"悬赏",
+	"弥助",
+	"勾协",
+	"探索突破",
+	"结界卡合成",
+	"加好友",
+	"领取登录礼包",
+	"领取邮件",
+	"爬塔",
+	"逢魔",
+	"地鬼",
+	"道馆",
+	"寮商店",
+	"领取寮金币",
+	"每日一抽",
+	"每周商店",
+	"秘闻",
+	"签到",
+	"御魂",
+	"每周分享",
+	"召唤礼包",
+	"领取饭盒酒壶",
+	"斗技",
+	"对弈竞猜",
+}
+
+// jingzhi task pool: same as daily + 组队御魂.
+var jingzhiTaskOrder = []string{
+	"寄养",
+	"悬赏",
+	"弥助",
+	"勾协",
+	"探索突破",
+	"结界卡合成",
+	"加好友",
+	"领取登录礼包",
+	"领取邮件",
+	"爬塔",
+	"逢魔",
+	"地鬼",
+	"道馆",
+	"寮商店",
+	"领取寮金币",
+	"每日一抽",
+	"每周商店",
+	"秘闻",
+	"签到",
+	"御魂",
+	"每周分享",
+	"召唤礼包",
+	"领取饭盒酒壶",
+	"斗技",
+	"对弈竞猜",
+	"组队御魂",
+}
+
 var defaultTaskConfig = map[string]map[string]any{
 	"寄养":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_6h"},
 	"悬赏":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
@@ -143,6 +205,7 @@ var defaultTaskConfig = map[string]map[string]any{
 	"起号_式神养成": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
 	"起号_升级饭盒": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
 	"领取成就奖励":  {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
+	"组队御魂":    {"enabled": false, "fail_delay": 30, "next_time_rule": "on_demand"},
 }
 
 var defaultUserAssets = map[string]any{
@@ -159,7 +222,7 @@ var defaultUserAssets = map[string]any{
 }
 
 func UserTypes() []string {
-	return []string{UserTypeDaily, UserTypeDuiyi, UserTypeShuaka}
+	return []string{UserTypeDaily, UserTypeDuiyi, UserTypeShuaka, UserTypeFoster, UserTypeJingzhi}
 }
 
 func NormalizeUserType(value string) string {
@@ -170,6 +233,10 @@ func NormalizeUserType(value string) string {
 		return UserTypeDuiyi
 	case UserTypeShuaka:
 		return UserTypeShuaka
+	case UserTypeFoster:
+		return UserTypeFoster
+	case UserTypeJingzhi:
+		return UserTypeJingzhi
 	default:
 		return UserTypeDaily
 	}
@@ -177,9 +244,11 @@ func NormalizeUserType(value string) string {
 
 func TaskPools() map[string][]string {
 	return map[string][]string{
-		UserTypeDaily:  UserTypeTaskOrder(UserTypeDaily),
-		UserTypeDuiyi:  UserTypeTaskOrder(UserTypeDuiyi),
-		UserTypeShuaka: UserTypeTaskOrder(UserTypeShuaka),
+		UserTypeDaily:   UserTypeTaskOrder(UserTypeDaily),
+		UserTypeDuiyi:   UserTypeTaskOrder(UserTypeDuiyi),
+		UserTypeShuaka:  UserTypeTaskOrder(UserTypeShuaka),
+		UserTypeFoster:  UserTypeTaskOrder(UserTypeFoster),
+		UserTypeJingzhi: UserTypeTaskOrder(UserTypeJingzhi),
 	}
 }
 
@@ -189,6 +258,10 @@ func UserTypeTaskOrder(userType string) []string {
 		return cloneStrings(duiyiTaskOrder)
 	case UserTypeShuaka:
 		return cloneStrings(shuakaTaskOrder)
+	case UserTypeFoster:
+		return cloneStrings(fosterTaskOrder)
+	case UserTypeJingzhi:
+		return cloneStrings(jingzhiTaskOrder)
 	default:
 		return cloneStrings(dailyTaskOrder)
 	}

@@ -9,7 +9,7 @@ const props = defineProps({
   accountNo: { type: String, default: "" },
 });
 
-const emit = defineEmits(["logout"]);
+const emit = defineEmits(["logout", "can-view-logs", "user-type"]);
 
 const loading = reactive({ profile: false, saveProfile: false });
 
@@ -65,6 +65,8 @@ async function loadMeProfile() {
     profile.manager_alias = response.manager_alias || "";
     editForm.server = profile.server;
     editForm.username = profile.username;
+    emit("can-view-logs", !!response.can_view_logs);
+    emit("user-type", profile.user_type);
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {

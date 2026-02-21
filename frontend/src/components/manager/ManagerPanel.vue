@@ -12,7 +12,7 @@
     <template v-else>
       <el-tabs v-model="activeTab" class="module-tabs">
         <el-tab-pane label="总览" name="overview">
-          <OverviewTab :token="token" />
+          <OverviewTab :token="token" @manager-type-changed="(t) => managerType = t" />
         </el-tab-pane>
 
         <el-tab-pane label="任务池" name="taskpool">
@@ -20,7 +20,7 @@
         </el-tab-pane>
 
         <el-tab-pane label="激活码管理" name="codes">
-          <ActivationCodesTab :token="token" />
+          <ActivationCodesTab :token="token" :manager-type="managerType" />
         </el-tab-pane>
 
         <el-tab-pane label="账号管理" name="users">
@@ -73,6 +73,7 @@ const props = defineProps({
 defineEmits(["logout"]);
 
 const activeTab = ref("overview");
+const managerType = ref("all");
 const selectedUserId = ref(0);
 const selectedUserType = ref("daily");
 const selectedUserAccountNo = ref("");
@@ -93,6 +94,7 @@ watch(
   () => props.token,
   (value) => {
     if (!value) {
+      managerType.value = "all";
       selectedUserId.value = 0;
       selectedUserType.value = "daily";
       selectedUserAccountNo.value = "";

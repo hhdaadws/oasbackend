@@ -15,9 +15,32 @@ const (
 	UserStatusExpired  = "expired"
 	UserStatusDisabled = "disabled"
 
-	UserTypeDaily  = "daily"
-	UserTypeDuiyi  = "duiyi"
-	UserTypeShuaka = "shuaka"
+	UserTypeDaily   = "daily"
+	UserTypeDuiyi   = "duiyi"
+	UserTypeShuaka  = "shuaka"
+	UserTypeFoster  = "foster"
+	UserTypeJingzhi = "jingzhi"
+
+	// Friendship statuses
+	FriendshipStatusPending  = "pending"
+	FriendshipStatusAccepted = "accepted"
+	FriendshipStatusRejected = "rejected"
+
+	// TeamYuhunRequest statuses
+	TeamYuhunStatusPending   = "pending"
+	TeamYuhunStatusAccepted  = "accepted"
+	TeamYuhunStatusRejected  = "rejected"
+	TeamYuhunStatusCompleted = "completed"
+	TeamYuhunStatusExpired   = "expired"
+
+	// TeamYuhun roles
+	TeamYuhunRoleDriver   = "driver"
+	TeamYuhunRoleAttacker = "attacker"
+
+	ManagerTypeDaily  = "daily"
+	ManagerTypeDuiyi  = "duiyi"
+	ManagerTypeShuaka = "shuaka"
+	ManagerTypeAll    = "all"
 
 	CodeStatusUnused  = "unused"
 	CodeStatusUsed    = "used"
@@ -70,6 +93,7 @@ type Manager struct {
 	Username     string     `gorm:"size:64;not null;uniqueIndex"`
 	PasswordHash string     `gorm:"size:255;not null"`
 	Alias        string     `gorm:"size:64;not null;default:''"`
+	ManagerType  string     `gorm:"size:20;not null;default:all;index"`
 	ExpiresAt    *time.Time `gorm:"index"`
 	CreatedAt    time.Time  `gorm:"not null"`
 	UpdatedAt    time.Time  `gorm:"not null"`
@@ -79,6 +103,7 @@ type ManagerRenewalKey struct {
 	ID                    uint   `gorm:"primaryKey"`
 	Code                  string `gorm:"size:64;not null;uniqueIndex"`
 	DurationDays          int    `gorm:"not null"`
+	ManagerType           string `gorm:"size:20;not null;default:all"`
 	Status                string `gorm:"size:20;not null;default:unused;index"`
 	UsedByManagerID       *uint  `gorm:"index"`
 	UsedAt                *time.Time
@@ -103,7 +128,10 @@ type User struct {
 	ShikigamiConfig datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
 	ExploreProgress datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
 	NotifyConfig    datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
-	CreatedBy       string            `gorm:"size:30;not null"`
+	CanViewLogs       bool              `gorm:"not null;default:false"`
+	DuiyiAnswerSource string            `gorm:"size:20;not null;default:'manager'"` // "manager" | "blogger"
+	DuiyiBloggerID    *uint             `gorm:"index"`
+	CreatedBy         string            `gorm:"size:30;not null"`
 	CreatedAt     time.Time         `gorm:"not null"`
 	UpdatedAt     time.Time         `gorm:"not null"`
 }
@@ -184,6 +212,25 @@ type DuiyiAnswerConfig struct {
 	UpdatedAt time.Time         `gorm:"not null"`
 }
 
+// Blogger represents a duiyi answer source managed by super admin.
+type Blogger struct {
+	ID        uint      `gorm:"primaryKey"`
+	Name      string    `gorm:"size:64;not null;uniqueIndex"`
+	CreatedAt time.Time `gorm:"not null"`
+	UpdatedAt time.Time `gorm:"not null"`
+}
+
+// BloggerAnswerConfig stores globally shared duiyi answers for a blogger.
+// Any manager can configure; all users across the backend share the same answers.
+type BloggerAnswerConfig struct {
+	ID        uint              `gorm:"primaryKey"`
+	BloggerID uint              `gorm:"not null;uniqueIndex:idx_blogger_answer_blogger_date"`
+	Date      string            `gorm:"size:10;not null;uniqueIndex:idx_blogger_answer_blogger_date"`
+	Answers   datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"`
+	UpdatedBy uint              `gorm:"not null"`
+	UpdatedAt time.Time         `gorm:"not null"`
+}
+
 type AuditLog struct {
 	ID         uint              `gorm:"primaryKey"`
 	ActorType  string            `gorm:"size:20;not null;index;index:idx_audit_logs_actor,priority:1"`
@@ -215,6 +262,31 @@ type ScanJob struct {
 	UpdatedAt     time.Time `gorm:"not null"`
 }
 
+type Friendship struct {
+	ID        uint      `gorm:"primaryKey"`
+	ManagerID uint      `gorm:"not null;index:idx_friendship_manager"`
+	UserID    uint      `gorm:"not null;index:idx_friendship_user"` // 发起方
+	FriendID  uint      `gorm:"not null"`                          // 接收方
+	Status    string    `gorm:"size:20;not null;default:pending;index"`
+	CreatedAt time.Time `gorm:"not null"`
+	UpdatedAt time.Time `gorm:"not null"`
+}
+
+type TeamYuhunRequest struct {
+	ID              uint              `gorm:"primaryKey"`
+	ManagerID       uint              `gorm:"not null;index"`
+	RequesterID     uint              `gorm:"not null;index"` // 发起方 user_id
+	ReceiverID      uint              `gorm:"not null;index"` // 接收方 user_id
+	ScheduledAt     time.Time         `gorm:"not null;index"` // 预约执行时间 (北京时间)
+	Status          string            `gorm:"size:20;not null;default:pending;index"`
+	RequesterRole   string            `gorm:"size:20;not null"`                       // driver / attacker
+	ReceiverRole    string            `gorm:"size:20"`                                // driver / attacker (接受时填写)
+	RequesterLineup datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"` // {group, position}
+	ReceiverLineup  datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"` // {group, position}
+	CreatedAt       time.Time         `gorm:"not null"`
+	UpdatedAt       time.Time         `gorm:"not null"`
+}
+
 func AutoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&SuperAdmin{},
@@ -229,7 +301,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&AgentNode{},
 		&AuditLog{},
 		&DuiyiAnswerConfig{},
+		&Blogger{},
+		&BloggerAnswerConfig{},
 		&ScanJob{},
+		&Friendship{},
+		&TeamYuhunRequest{},
 	); err != nil {
 		return err
 	}
@@ -280,6 +356,10 @@ func NormalizeUserType(value string) string {
 		return UserTypeDuiyi
 	case UserTypeShuaka:
 		return UserTypeShuaka
+	case UserTypeFoster:
+		return UserTypeFoster
+	case UserTypeJingzhi:
+		return UserTypeJingzhi
 	default:
 		return UserTypeDaily
 	}
@@ -289,4 +369,49 @@ func IsValidUserType(value string) bool {
 	normalized := NormalizeUserType(value)
 	raw := strings.ToLower(strings.TrimSpace(value))
 	return raw == normalized
+}
+
+func NormalizeManagerType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case ManagerTypeDaily:
+		return ManagerTypeDaily
+	case ManagerTypeDuiyi:
+		return ManagerTypeDuiyi
+	case ManagerTypeShuaka:
+		return ManagerTypeShuaka
+	case ManagerTypeAll:
+		return ManagerTypeAll
+	default:
+		return ManagerTypeAll
+	}
+}
+
+func IsValidManagerType(value string) bool {
+	normalized := NormalizeManagerType(value)
+	raw := strings.ToLower(strings.TrimSpace(value))
+	return raw == normalized
+}
+
+// ManagerCanCreateUserType checks if a manager of the given managerType
+// is allowed to create an activation code with the given userType.
+func ManagerCanCreateUserType(managerType, userType string) bool {
+	if managerType == ManagerTypeAll {
+		return true
+	}
+	// daily 管理员可创建 daily / foster / jingzhi 用户（日常系）
+	if managerType == ManagerTypeDaily {
+		return userType == UserTypeDaily || userType == UserTypeFoster || userType == UserTypeJingzhi
+	}
+	return managerType == userType
+}
+
+// AllowedUserTypes returns the list of user types a manager can create.
+func AllowedUserTypes(managerType string) []string {
+	if managerType == ManagerTypeAll {
+		return []string{UserTypeDaily, UserTypeDuiyi, UserTypeShuaka, UserTypeFoster, UserTypeJingzhi}
+	}
+	if managerType == ManagerTypeDaily {
+		return []string{UserTypeDaily, UserTypeFoster, UserTypeJingzhi}
+	}
+	return []string{managerType}
 }

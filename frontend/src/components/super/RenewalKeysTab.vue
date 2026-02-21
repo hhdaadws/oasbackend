@@ -7,6 +7,8 @@ import {
   keyStatusLabel,
   formatTime,
   patchSummary,
+  managerTypeLabel,
+  MANAGER_TYPE_OPTIONS,
 } from "../../lib/helpers";
 import { usePagination } from "../../composables/usePagination";
 import { useBatchSelection } from "../../composables/useBatchSelection";
@@ -19,8 +21,8 @@ const props = defineProps({
 });
 
 const loading = reactive({ createKey: false, keys: false });
-const renewalForm = reactive({ duration_days: 30 });
-const latestRenewal = reactive({ code: "", duration_days: 0 });
+const renewalForm = reactive({ duration_days: 30, manager_type: "all" });
+const latestRenewal = reactive({ code: "", duration_days: 0, manager_type: "all" });
 const keyFilters = reactive({ keyword: "", status: "" });
 const keySummary = reactive({ total: 0, unused: 0, used: 0, revoked: 0, deleted: 0 });
 const renewalKeys = ref([]);
@@ -51,9 +53,11 @@ async function createRenewalKey() {
   try {
     const response = await superApi.createManagerRenewalKey(props.token, {
       duration_days: renewalForm.duration_days,
+      manager_type: renewalForm.manager_type,
     });
     latestRenewal.code = response.code || "";
     latestRenewal.duration_days = response.duration_days || renewalForm.duration_days;
+    latestRenewal.manager_type = response.manager_type || renewalForm.manager_type;
     ElMessage.success("管理员续费秘钥已生成");
     await loadRenewalKeys();
   } catch (error) {
@@ -213,6 +217,11 @@ async function copyKeyCode(code) {
           </template>
         </el-table-column>
         <el-table-column prop="duration_days" label="天数" width="100" sortable />
+        <el-table-column label="类型" width="120">
+          <template #default="scope">
+            <el-tag type="info">{{ managerTypeLabel(scope.row.manager_type) }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="120" sortable>
           <template #default="scope">
             <el-tag :type="keyStatusTagType(scope.row.status)">{{ keyStatusLabel(scope.row.status) }}</el-tag>
@@ -271,11 +280,16 @@ async function copyKeyCode(code) {
       <el-form-item label="续期天数">
         <el-input-number v-model="renewalForm.duration_days" :min="1" :max="3650" class="w-full" />
       </el-form-item>
+      <el-form-item label="管理员类型">
+        <el-select v-model="renewalForm.manager_type" class="w-full">
+          <el-option v-for="item in MANAGER_TYPE_OPTIONS" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+      </el-form-item>
     </el-form>
     <div v-if="latestRenewal.code" class="latest-key-row">
       <el-alert type="success" :closable="false"
         :title="`秘钥：${latestRenewal.code}`"
-        :description="`续期天数：${latestRenewal.duration_days} 天`"
+        :description="`续期天数：${latestRenewal.duration_days} 天 | 类型：${managerTypeLabel(latestRenewal.manager_type)}`"
       />
       <el-button size="small" type="success" plain @click="copyKeyCode(latestRenewal.code)">复制</el-button>
     </div>

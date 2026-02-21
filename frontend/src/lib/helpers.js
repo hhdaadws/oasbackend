@@ -16,6 +16,8 @@ export function keyStatusTagType(status) {
 export function userTypeLabel(userType) {
   if (userType === "duiyi") return "对弈竞猜";
   if (userType === "shuaka") return "刷卡";
+  if (userType === "foster") return "寄养";
+  if (userType === "jingzhi") return "精致日常";
   return "日常";
 }
 
@@ -65,7 +67,21 @@ export const USER_TYPE_OPTIONS = [
   { value: "daily", label: "日常" },
   { value: "duiyi", label: "对弈竞猜" },
   { value: "shuaka", label: "刷卡" },
+  { value: "foster", label: "寄养" },
+  { value: "jingzhi", label: "精致日常" },
 ];
+
+export const MANAGER_TYPE_OPTIONS = [
+  { value: "daily", label: "日常" },
+  { value: "shuaka", label: "刷卡" },
+  { value: "duiyi", label: "对弈竞猜" },
+  { value: "all", label: "全部" },
+];
+
+export function managerTypeLabel(managerType) {
+  const map = { daily: "日常", shuaka: "刷卡", duiyi: "对弈竞猜", all: "全部" };
+  return map[managerType] || managerType || "-";
+}
 
 export function formatTime(isoString) {
   if (!isoString || isoString === "-") return "-";
@@ -131,7 +147,7 @@ export function isHHmmPattern(value) {
 }
 
 export const SPECIAL_TASK_NAMES = new Set([
-  '探索突破', '结界卡合成', '寮商店', '每周商店', '御魂', '斗技',
+  '探索突破', '结界卡合成', '寮商店', '每周商店', '御魂', '斗技', '对弈竞猜',
 ]);
 
 export function auditActionLabel(action) {
@@ -145,6 +161,10 @@ export function auditActionLabel(action) {
     reset_manager_password: "重置管理员密码",
     batch_manager_lifecycle: "批量修改管理员有效期",
     redeem_manager_renewal_key: "使用续费密钥",
+    create_blogger: "创建博主",
+    delete_blogger: "删除博主",
+    set_blogger_answer: "配置博主答案",
+    set_duiyi_answer: "配置对弈答案",
   };
   return map[action] || action || "-";
 }
@@ -173,6 +193,10 @@ export const AUDIT_ACTION_OPTIONS = [
   { value: "patch_manager_lifecycle", label: "修改管理员有效期" },
   { value: "batch_manager_lifecycle", label: "批量修改管理员有效期" },
   { value: "reset_manager_password", label: "重置管理员密码" },
+  { value: "create_blogger", label: "创建博主" },
+  { value: "delete_blogger", label: "删除博主" },
+  { value: "set_blogger_answer", label: "配置博主答案" },
+  { value: "set_duiyi_answer", label: "配置对弈答案" },
 ];
 
 export async function copyToClipboard(text) {

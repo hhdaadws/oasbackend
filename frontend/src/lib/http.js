@@ -129,6 +129,13 @@ export const superApi = {
       params,
       headers: withBearer(token),
     }),
+  // Bloggers
+  listBloggers: (token) =>
+    request({ method: "GET", url: "/super/bloggers", headers: withBearer(token) }),
+  createBlogger: (token, payload) =>
+    request({ method: "POST", url: "/super/bloggers", data: payload, headers: withBearer(token) }),
+  deleteBlogger: (token, id) =>
+    request({ method: "DELETE", url: `/super/bloggers/${id}`, headers: withBearer(token) }),
 };
 
 export const managerApi = {
@@ -250,6 +257,13 @@ export const managerApi = {
       url: `/manager/users/${userId}/logs`,
       headers: withBearer(token),
     }),
+  patchUserSettings: (token, userId, payload) =>
+    request({
+      method: "PATCH",
+      url: `/manager/users/${userId}/settings`,
+      data: payload,
+      headers: withBearer(token),
+    }),
   batchUserLifecycle: (token, payload) =>
     request({
       method: "POST",
@@ -310,6 +324,13 @@ export const managerApi = {
       data: payload,
       headers: withBearer(token),
     }),
+  // Bloggers
+  listBloggers: (token) =>
+    request({ method: "GET", url: "/manager/bloggers", headers: withBearer(token) }),
+  getBloggerAnswers: (token, bloggerId) =>
+    request({ method: "GET", url: `/manager/blogger-answers/${bloggerId}`, headers: withBearer(token) }),
+  putBloggerAnswer: (token, bloggerId, payload) =>
+    request({ method: "PUT", url: `/manager/blogger-answers/${bloggerId}`, data: payload, headers: withBearer(token) }),
 };
 
 export const userApi = {
@@ -392,4 +413,35 @@ export const userApi = {
     request({ method: "POST", url: "/user/scan/cancel", data: payload, headers: withBearer(token) }),
   scanHeartbeat: (token, payload) =>
     request({ method: "POST", url: "/user/scan/heartbeat", data: payload, headers: withBearer(token) }),
+  // Friends
+  getFriends: (token) =>
+    request({ method: "GET", url: "/user/friends", headers: withBearer(token) }),
+  getFriendRequests: (token) =>
+    request({ method: "GET", url: "/user/friend-requests", headers: withBearer(token) }),
+  getFriendCandidates: (token) =>
+    request({ method: "GET", url: "/user/friends/candidates", headers: withBearer(token) }),
+  sendFriendRequest: (token, payload) =>
+    request({ method: "POST", url: "/user/friends/request", data: payload, headers: withBearer(token) }),
+  acceptFriendRequest: (token, id) =>
+    request({ method: "POST", url: `/user/friends/${id}/accept`, headers: withBearer(token) }),
+  rejectFriendRequest: (token, id) =>
+    request({ method: "POST", url: `/user/friends/${id}/reject`, headers: withBearer(token) }),
+  deleteFriend: (token, id) =>
+    request({ method: "DELETE", url: `/user/friends/${id}`, headers: withBearer(token) }),
+  // Team Yuhun
+  getTeamYuhunRequests: (token) =>
+    request({ method: "GET", url: "/user/team-yuhun/requests", headers: withBearer(token) }),
+  sendTeamYuhunRequest: (token, payload) =>
+    request({ method: "POST", url: "/user/team-yuhun/request", data: payload, headers: withBearer(token) }),
+  acceptTeamYuhunRequest: (token, id, payload) =>
+    request({ method: "POST", url: `/user/team-yuhun/${id}/accept`, data: payload, headers: withBearer(token) }),
+  rejectTeamYuhunRequest: (token, id) =>
+    request({ method: "POST", url: `/user/team-yuhun/${id}/reject`, headers: withBearer(token) }),
+  cancelTeamYuhunRequest: (token, id) =>
+    request({ method: "DELETE", url: `/user/team-yuhun/${id}`, headers: withBearer(token) }),
+  // Duiyi answer source
+  getDuiyiAnswerSources: (token) =>
+    request({ method: "GET", url: "/user/duiyi-answer-sources", headers: withBearer(token) }),
+  putDuiyiAnswerSource: (token, payload) =>
+    request({ method: "PUT", url: "/user/duiyi-answer-source", data: payload, headers: withBearer(token) }),
 };

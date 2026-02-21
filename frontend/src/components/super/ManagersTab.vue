@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { parseApiError, superApi } from "../../lib/http";
-import { formatTime, patchSummary } from "../../lib/helpers";
+import { formatTime, patchSummary, managerTypeLabel, MANAGER_TYPE_OPTIONS } from "../../lib/helpers";
 import { usePagination } from "../../composables/usePagination";
 import { useBatchSelection } from "../../composables/useBatchSelection";
 import { useDebouncedFilter } from "../../composables/useDebouncedFilter";
@@ -23,7 +23,7 @@ const batchForm = reactive({ extend_days: 30 });
 
 const showEditDialog = ref(false);
 const editingManager = ref(null);
-const editForm = reactive({ expires_at: "", extend_days: 0 });
+const editForm = reactive({ expires_at: "", extend_days: 0, manager_type: "all" });
 
 const showPasswordDialog = ref(false);
 const passwordManager = ref(null);
@@ -33,6 +33,7 @@ function openEditDialog(row) {
   editingManager.value = row;
   editForm.expires_at = row.expires_at || "";
   editForm.extend_days = 0;
+  editForm.manager_type = row.manager_type || "all";
   showEditDialog.value = true;
 }
 
@@ -94,14 +95,18 @@ async function saveManagerLifecycle() {
   if (!editingManager.value?.id) { ElMessage.warning("无效管理员记录"); return; }
   const expiresAt = String(editForm.expires_at || "").trim();
   const extendDays = Number(editForm.extend_days || 0);
-  if (!expiresAt && extendDays <= 0) {
-    ElMessage.warning("请填写到期时间或延长天数");
+  const managerType = editForm.manager_type || "";
+  const hasLifecycleChange = expiresAt || extendDays > 0;
+  const hasTypeChange = managerType && managerType !== (editingManager.value.manager_type || "all");
+  if (!hasLifecycleChange && !hasTypeChange) {
+    ElMessage.warning("请填写到期时间、延长天数或修改类型");
     return;
   }
   editingManager.value._updating = true;
   const payload = {};
   if (expiresAt) payload.expires_at = expiresAt;
   if (extendDays > 0) payload.extend_days = extendDays;
+  if (managerType) payload.manager_type = managerType;
   try {
     await superApi.patchManagerLifecycle(props.token, editingManager.value.id, payload);
     ElMessage.success(`管理员 ${editingManager.value.username} 生命周期已更新`);
@@ -232,6 +237,11 @@ async function resetManagerPassword() {
             <span class="clickable-cell" @click="copyUsername(scope.row.username)" title="点击复制">{{ scope.row.username }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="类型" width="120">
+          <template #default="scope">
+            <el-tag type="info">{{ managerTypeLabel(scope.row.manager_type) }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="到期标记" width="130" sortable>
           <template #default="scope">
             <el-tag :type="scope.row.is_expired ? 'warning' : 'success'">
@@ -285,9 +295,14 @@ async function resetManagerPassword() {
     </div>
   </section>
 
-  <el-dialog v-model="showEditDialog" title="编辑管理员生命周期" class="dialog-sm" append-to-body>
+  <el-dialog v-model="showEditDialog" title="编辑管理员" class="dialog-sm" append-to-body>
     <p class="muted mb-12">管理员：{{ editingManager?.username }}</p>
     <el-form :model="editForm" label-width="100px">
+      <el-form-item label="管理员类型">
+        <el-select v-model="editForm.manager_type" class="w-full">
+          <el-option v-for="item in MANAGER_TYPE_OPTIONS" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+      </el-form-item>
       <el-form-item label="到期时间">
         <el-date-picker v-model="editForm.expires_at" type="datetime"
           value-format="YYYY-MM-DD HH:mm" placeholder="选择到期日期时间" class="w-full" />

@@ -20,6 +20,11 @@ const userType = ref("daily");
 const taskFilter = ref("");
 const lineupDialogVisible = ref(false);
 
+// Duiyi answer source
+const duiyiSource = ref("manager");
+const duiyiBloggerId = ref(null);
+const duiyiBloggers = ref([]);
+
 const filteredTaskRows = computed(() => {
   if (taskFilter.value === "enabled") return taskRows.value.filter(r => r.config.enabled === true);
   if (taskFilter.value === "disabled") return taskRows.value.filter(r => r.config.enabled !== true);
@@ -75,6 +80,7 @@ async function loadMeTasks() {
     };
     buildTaskRows(merged);
     stringifyTaskConfig(merged);
+    if (ut === "duiyi") await loadDuiyiSources();
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
@@ -122,6 +128,34 @@ function isSpecialTask(name) {
 }
 function tableRowClassName({ row }) {
   return isSpecialTask(row.name) ? '' : 'hide-expand';
+}
+
+async function loadDuiyiSources() {
+  if (!props.token || userType.value !== "duiyi") return;
+  try {
+    const res = await userApi.getDuiyiAnswerSources(props.token);
+    const data = res.data;
+    duiyiSource.value = data.current_source || "manager";
+    duiyiBloggerId.value = data.current_blogger_id || null;
+    duiyiBloggers.value = data.bloggers || [];
+  } catch { /* ignore */ }
+}
+
+async function saveDuiyiSource() {
+  if (!props.token) return;
+  const payload = { source: duiyiSource.value };
+  if (duiyiSource.value === "blogger") {
+    if (!duiyiBloggerId.value) { ElMessage.warning("请选择博主"); return; }
+    payload.blogger_id = duiyiBloggerId.value;
+  } else {
+    duiyiBloggerId.value = null;
+  }
+  try {
+    await userApi.putDuiyiAnswerSource(props.token, payload);
+    ElMessage.success("答案来源已保存");
+  } catch (e) {
+    ElMessage.error(parseApiError(e));
+  }
 }
 </script>
 
@@ -201,6 +235,26 @@ function tableRowClassName({ row }) {
                   </el-radio-group>
                   <span class="expand-label">目标分:</span>
                   <el-input-number v-model="scope.row.config.target_score" :min="0" size="small" class="w-120" @change="saveOneTask(scope.row)" />
+                </div>
+              </template>
+              <!-- 对弈竞猜 -->
+              <template v-else-if="scope.row.name === '对弈竞猜'">
+                <div class="expand-row">
+                  <span class="expand-label">答案来源:</span>
+                  <el-radio-group v-model="duiyiSource" @change="saveDuiyiSource">
+                    <el-radio value="manager">管理员答案</el-radio>
+                    <el-radio value="blogger">博主答案</el-radio>
+                  </el-radio-group>
+                  <el-select
+                    v-if="duiyiSource === 'blogger'"
+                    v-model="duiyiBloggerId"
+                    placeholder="选择博主"
+                    size="small"
+                    class="w-120"
+                    @change="saveDuiyiSource"
+                  >
+                    <el-option v-for="b in duiyiBloggers" :key="b.id" :label="b.name" :value="b.id" />
+                  </el-select>
                 </div>
               </template>
             </div>

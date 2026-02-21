@@ -112,13 +112,13 @@ HTTP 状态码：`200` 成功，`201` 创建成功，`400` 参数错误，`401` 
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `user_type` | string | 可选，按用户类型过滤（daily/duiyi/shuaka） |
+| `user_type` | string | 可选，按用户类型过滤（daily/duiyi/shuaka/foster/jingzhi） |
 
 **响应：**
 ```json
 {
   "data": {
-    "pools": { "daily": [...], "duiyi": [...], "shuaka": [...] },
+    "pools": { "daily": [...], "duiyi": [...], "shuaka": [...], "foster": [...], "jingzhi": [...] },
     "templates": { "signin": {...}, "explore": {...}, ... }
   }
 }
@@ -156,7 +156,8 @@ Super Admin 登录。
 **请求：**
 ```json
 {
-  "duration_days": 30    // 1-3650
+  "duration_days": 30,          // 1-3650
+  "manager_type": "all"         // daily | shuaka | duiyi | all（必填）
 }
 ```
 
@@ -167,6 +168,7 @@ Super Admin 登录。
     "id": 1,
     "code": "abc123def456",
     "duration_days": 30,
+    "manager_type": "all",
     "status": "unused",
     "created_at": "2025-01-01T00:00:00Z"
   }
@@ -195,6 +197,7 @@ Super Admin 登录。
         "id": 1,
         "code": "abc123",
         "duration_days": 30,
+        "manager_type": "all",
         "status": "unused",
         "used_by_manager_id": null,
         "used_at": null,
@@ -288,6 +291,7 @@ Super Admin 登录。
         "id": 1,
         "username": "mgr1",
         "alias": "管理员A",
+        "manager_type": "all",
         "expires_at": "2025-12-31T23:59:59Z",
         "user_count": 50,
         "created_at": "2025-01-01T00:00:00Z"
@@ -310,7 +314,8 @@ Super Admin 登录。
 ```json
 {
   "expires_at": "2026-06-30T23:59:59Z",   // 可选，直接设置过期时间
-  "extend_days": 30                         // 可选，延长天数
+  "extend_days": 30,                       // 可选，延长天数
+  "manager_type": "daily"                  // 可选，修改管理员类型（daily/shuaka/duiyi/all）
 }
 ```
 
@@ -318,6 +323,8 @@ Super Admin 登录。
 ```json
 {"data": {"id": 1, "expires_at": "2026-06-30T23:59:59Z"}}
 ```
+
+**说明：** 三个字段至少填一个。`manager_type` 可单独修改（不修改有效期）。
 
 ---
 
@@ -377,6 +384,10 @@ Super Admin 登录。
 - `reset_manager_password` — 重置管理员密码
 - `batch_manager_lifecycle` — 批量修改管理员有效期
 - `redeem_manager_renewal_key` — 管理员使用续费密钥
+- `create_blogger` — 创建博主
+- `delete_blogger` — 删除博主
+- `set_blogger_answer` — 管理员配置博主答案
+- `set_duiyi_answer` — 管理员配置对弈答案
 
 **响应：**
 ```json
@@ -399,6 +410,67 @@ Super Admin 登录。
   "page": 1,
   "page_size": 50
 }
+```
+
+---
+
+### 博主管理
+
+#### POST /api/v1/super/bloggers
+
+创建博主。
+
+**请求：**
+```json
+{
+  "name": "博主名称"    // 1-64 字符
+}
+```
+
+**响应 200：**
+```json
+{
+  "data": {
+    "id": 1,
+    "name": "博主名称",
+    "created_at": "2026-02-21T10:00:00Z"
+  }
+}
+```
+
+**错误响应：**
+- `409` — 博主名称已存在
+
+---
+
+#### GET /api/v1/super/bloggers
+
+获取博主列表。
+
+**响应：**
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "name": "博主A",
+      "created_at": "2026-02-21T10:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+#### DELETE /api/v1/super/bloggers/:id
+
+删除博主。删除时会自动清理：
+- 该博主的所有答案配置（`BloggerAnswerConfig`）
+- 引用该博主的用户将被重置为 `duiyi_answer_source='manager'`
+
+**响应 200：**
+```json
+{"data": "ok"}
 ```
 
 ---
@@ -456,11 +528,18 @@ Manager 登录。
     "id": 1,
     "username": "mgr1",
     "alias": "管理员A",
+    "manager_type": "all",
     "expires_at": "2025-12-31T23:59:59Z",
     "created_at": "2025-01-01T00:00:00Z"
   }
 }
 ```
+
+**`manager_type` 字段说明：** 管理员类型，取值为 `daily`（日常）、`shuaka`（刷卡）、`duiyi`（对弈竞猜）、`all`（全部）。决定管理员可以创建哪些类型的激活码和用户：
+- `all` 管理员可创建所有用户类型
+- `daily` 管理员可创建 `daily`（日常）、`foster`（寄养）、`jingzhi`（精致日常）
+- `shuaka` 管理员只能创建 `shuaka`
+- `duiyi` 管理员只能创建 `duiyi`
 
 ---
 
@@ -477,6 +556,8 @@ Manager 使用续费密钥续期。
 ```json
 {"data": {"expires_at": "2026-06-30T23:59:59Z", "extended_days": 30}}
 ```
+
+**说明：** 兑换成功后，管理员的 `manager_type` 会被同步更新为续费密钥上的类型。
 
 ---
 
@@ -557,9 +638,11 @@ Manager 使用续费密钥续期。
 ```json
 {
   "duration_days": 30,               // 1-3650
-  "user_type": "daily"               // daily | duiyi | shuaka
+  "user_type": "daily"               // daily | duiyi | shuaka | foster | jingzhi
 }
 ```
+
+**说明：** 非 `all` 类型的管理员创建激活码时，`user_type` 会被强制设为管理员允许的类型（忽略请求中的值）。`all` 类型管理员可自由选择任意类型。`daily` 管理员可选择 `daily`、`foster`、`jingzhi`。
 
 **响应 201：**
 ```json
@@ -584,7 +667,7 @@ Manager 使用续费密钥续期。
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `status` | string | 可选（unused/used/revoked） |
-| `user_type` | string | 可选（daily/duiyi/shuaka） |
+| `user_type` | string | 可选（daily/duiyi/shuaka/foster/jingzhi） |
 | `keyword` | string | 可选，搜索 code |
 | `page` | int | 页码 |
 | `page_size` | int | 每页条数 |
@@ -642,6 +725,8 @@ Manager 使用续费密钥续期。
 }
 ```
 
+**说明：** 与激活码创建相同，`daily` 管理员可选择 `daily`/`foster`/`jingzhi`，`shuaka` 和 `duiyi` 管理员的 `user_type` 会被强制设为自身类型，`all` 类型管理员可自由选择。
+
 **响应 201：**
 ```json
 {
@@ -664,7 +749,7 @@ Manager 使用续费密钥续期。
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `status` | string | 可选（active/expired/disabled） |
-| `user_type` | string | 可选（daily/duiyi/shuaka） |
+| `user_type` | string | 可选（daily/duiyi/shuaka/foster/jingzhi） |
 | `keyword` | string | 可选，搜索 account_no/username |
 | `login_id` | string | 可选，精确匹配 login_id |
 | `page` | int | 页码 |
@@ -919,39 +1004,117 @@ Manager 使用续费密钥续期。
       "18:00": null,
       "20:00": null,
       "22:00": null
-    }
+    },
+    "current_window": "14:00"
   }
 }
 ```
 
 - `date`: 当日日期（北京时间），如无配置或日期过期则为 `null`
 - `answers`: 7个时间窗口（10:00~22:00）的答案，值为 `"左"`/`"右"` 或 `null`（未配置）
+- `current_window`: 当前时间窗口（字符串），不在对弈时间范围内时为空字符串
 
 #### PUT /api/v1/manager/duiyi-answers
 
-配置当日对弈竞猜答案。自动填充今日日期，替换已有配置。
+配置当前时间窗口的对弈竞猜答案。仅允许配置当前时间窗口，使用合并策略：读取已有配置，更新单个窗口，写回。
 
 **认证**: Manager JWT (Bearer Token)
 
 **请求体**:
 ```json
 {
-  "answers": {
-    "10:00": "左",
-    "12:00": "右",
-    "14:00": null
-  }
+  "window": "14:00",
+  "answer": "左"
 }
 ```
 
 **校验**:
-- key 必须为 `10:00`/`12:00`/`14:00`/`16:00`/`18:00`/`20:00`/`22:00` 之一
-- value 必须为 `"左"`、`"右"` 或 `null`
-- 未传递的窗口默认为 `null`
+- `window` 必须为当前时间窗口
+- `answer` 必须为 `"左"` 或 `"右"`
 
 **响应 200**: 同 GET 格式
 
-**响应 400**: `{"detail": "无效的时间窗口: ..."}`
+**响应 400**:
+- `{"detail": "只能配置当前窗口 XX:00 的答案"}`
+- `{"detail": "当前不在对弈竞猜时间范围内 (10:00-22:00)"}`
+
+---
+
+### 博主答案配置
+
+#### GET /api/v1/manager/bloggers
+
+获取博主列表（含今日答案状态）。
+
+**认证**: Manager JWT (Bearer Token)
+
+**响应 200**:
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "name": "博主A",
+      "has_today_answers": true
+    }
+  ]
+}
+```
+
+---
+
+#### GET /api/v1/manager/blogger-answers/:blogger_id
+
+获取某博主今日答案配置。
+
+**认证**: Manager JWT (Bearer Token)
+
+**响应 200**:
+```json
+{
+  "data": {
+    "blogger_id": 1,
+    "blogger_name": "博主A",
+    "date": "2026-02-21",
+    "answers": {
+      "10:00": "左",
+      "12:00": null,
+      "14:00": null,
+      "16:00": null,
+      "18:00": null,
+      "20:00": null,
+      "22:00": null
+    },
+    "current_window": "10:00"
+  }
+}
+```
+
+---
+
+#### PUT /api/v1/manager/blogger-answers/:blogger_id
+
+配置博主当前窗口的答案。仅允许配置当前时间窗口，博主答案全后端共享，任意管理员可配置。
+
+**认证**: Manager JWT (Bearer Token)
+
+**请求体**:
+```json
+{
+  "window": "14:00",
+  "answer": "左"
+}
+```
+
+**校验**:
+- `window` 必须为当前时间窗口
+- `answer` 必须为 `"左"` 或 `"右"`
+
+**响应 200**: 同 GET 格式
+
+**响应 400**:
+- `{"detail": "只能配置当前窗口 XX:00 的答案"}`
+- `{"detail": "当前不在对弈竞猜时间范围内 (10:00-22:00)"}`
 
 ---
 
@@ -1232,6 +1395,300 @@ Manager 使用续费密钥续期。
 
 ---
 
+### 对弈竞猜答案来源
+
+#### GET /api/v1/user/duiyi-answer-sources
+
+获取当前答案来源设置及可选博主列表。
+
+**认证**: User Token (Bearer)
+
+**响应 200**:
+```json
+{
+  "data": {
+    "current_source": "manager",
+    "current_blogger_id": null,
+    "bloggers": [
+      {"id": 1, "name": "博主A"},
+      {"id": 2, "name": "博主B"}
+    ]
+  }
+}
+```
+
+- `current_source`: `"manager"` 或 `"blogger"`
+- `current_blogger_id`: 当 source 为 blogger 时的博主 ID，否则为 null
+
+---
+
+#### PUT /api/v1/user/duiyi-answer-source
+
+设置答案来源。
+
+**认证**: User Token (Bearer)
+
+**请求体**:
+```json
+{
+  "source": "blogger",      // "manager" 或 "blogger"
+  "blogger_id": 1           // source 为 blogger 时必填
+}
+```
+
+**响应 200**:
+```json
+{
+  "data": {
+    "source": "blogger",
+    "blogger_id": 1
+  }
+}
+```
+
+**响应 400**:
+- `{"detail": "选择博主答案时必须指定博主"}`
+- `{"detail": "指定的博主不存在"}`
+
+---
+
+### 好友系统（仅 jingzhi 用户）
+
+> 以下好友 API 仅限 `user_type=jingzhi` 的用户调用，其他类型用户调用返回 `403`。
+
+#### GET /api/v1/user/friends
+
+获取已接受的好友列表。
+
+**响应：**
+```json
+{
+  "friends": [
+    {
+      "friend_id": 2,
+      "account_no": "9876543210",
+      "username": "好友昵称",
+      "server": "不知火服"
+    }
+  ]
+}
+```
+
+---
+
+#### GET /api/v1/user/friend-requests
+
+获取收到的待处理好友请求。
+
+**响应：**
+```json
+{
+  "requests": [
+    {
+      "id": 5,
+      "from_user_id": 3,
+      "from_account_no": "1122334455",
+      "from_username": "请求者昵称",
+      "from_server": "不知火服",
+      "status": "pending",
+      "created_at": "2026-02-21T10:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+#### GET /api/v1/user/friends/candidates
+
+获取可添加的好友候选列表（同管理员下的 jingzhi 用户，排除已有好友关系的）。
+
+**响应：**
+```json
+{
+  "candidates": [
+    {
+      "user_id": 4,
+      "account_no": "5566778899",
+      "username": "候选昵称",
+      "server": "不知火服"
+    }
+  ]
+}
+```
+
+---
+
+#### POST /api/v1/user/friends/request
+
+发送好友请求。
+
+**请求：**
+```json
+{
+  "friend_account_no": "9876543210"
+}
+```
+
+**响应 201：**
+```json
+{"message": "好友请求已发送"}
+```
+
+**错误响应：**
+- `400` — 不能添加自己 / 目标用户不是 jingzhi 类型
+- `404` — 目标用户不存在
+- `409` — 已有好友关系或待处理的请求
+
+---
+
+#### POST /api/v1/user/friends/:id/accept
+
+接受好友请求。`:id` 为 Friendship 记录 ID。
+
+**响应：**
+```json
+{"message": "已接受好友请求"}
+```
+
+---
+
+#### POST /api/v1/user/friends/:id/reject
+
+拒绝好友请求。`:id` 为 Friendship 记录 ID。
+
+**响应：**
+```json
+{"message": "已拒绝好友请求"}
+```
+
+---
+
+#### DELETE /api/v1/user/friends/:id
+
+删除好友。`:id` 为 Friendship 记录 ID。
+
+**响应：**
+```json
+{"message": "好友已删除"}
+```
+
+---
+
+### 组队御魂（仅 jingzhi 用户）
+
+> 以下组队御魂 API 仅限 `user_type=jingzhi` 的用户调用。
+
+#### GET /api/v1/user/team-yuhun/requests
+
+获取我的组队御魂请求列表（包含发出和收到的请求）。
+
+**响应：**
+```json
+{
+  "requests": [
+    {
+      "id": 1,
+      "is_requester": true,
+      "partner_account_no": "9876543210",
+      "scheduled_at": "2026-02-22T18:00:00+08:00",
+      "status": "pending",
+      "requester_role": "driver",
+      "receiver_role": "",
+      "requester_lineup": {"group": 1, "position": 2},
+      "receiver_lineup": {},
+      "created_at": "2026-02-21T10:00:00Z"
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `is_requester` | bool | 是否为发起方 |
+| `status` | string | `pending` / `accepted` / `rejected` / `completed` / `expired` |
+| `requester_role` | string | 发起方角色：`driver`（司机）/ `attacker`（打手） |
+| `receiver_role` | string | 接收方角色（接受时填写） |
+| `requester_lineup` | object | 发起方阵容 `{group, position}`，0 = 未配置 |
+| `receiver_lineup` | object | 接收方阵容 |
+
+---
+
+#### POST /api/v1/user/team-yuhun/request
+
+发送组队御魂请求。
+
+**请求：**
+```json
+{
+  "friend_id": 2,
+  "scheduled_at": "2026-02-22T18:00:00+08:00",
+  "role": "driver",
+  "lineup": {"group": 1, "position": 2}
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `friend_id` | uint | 是 | 好友的 user_id（必须是已接受的好友） |
+| `scheduled_at` | datetime | 是 | 预约执行时间（必须在未来） |
+| `role` | string | 是 | 自己的角色：`driver` / `attacker` |
+| `lineup` | object | 是 | 阵容配置 `{group: 0-7, position: 0-7}` |
+
+**响应 201：**
+```json
+{"message": "组队请求已发送"}
+```
+
+**错误响应：**
+- `400` — 对方不是好友 / 角色无效 / 时间已过
+- `409` — 已有相同时段的待处理请求
+
+---
+
+#### POST /api/v1/user/team-yuhun/:id/accept
+
+接受组队请求（附带自己的角色和阵容配置）。
+
+**请求：**
+```json
+{
+  "role": "attacker",
+  "lineup": {"group": 3, "position": 1}
+}
+```
+
+**响应：**
+```json
+{"message": "已接受组队请求"}
+```
+
+**说明：** 接收方角色必须与发起方不同（一个司机一个打手）。
+
+---
+
+#### POST /api/v1/user/team-yuhun/:id/reject
+
+拒绝组队请求。
+
+**响应：**
+```json
+{"message": "已拒绝组队请求"}
+```
+
+---
+
+#### DELETE /api/v1/user/team-yuhun/:id
+
+取消组队请求（仅发起方可取消 pending 状态的请求）。
+
+**响应：**
+```json
+{"message": "组队请求已取消"}
+```
+
+---
+
 ## 6. Agent 端点（Oas2.0 客户端使用）
 
 > 如需专门面向 Oas2.0 开发的简化版文档，请参阅 [Oas2.0 Agent API 对接文档](./oas2-agent-api-spec.md)。
@@ -1257,11 +1714,12 @@ Agent 登录（使用 Manager 凭据）。
 {
   "token": "<jwt>",
   "manager_id": 1,
-  "node_id": "LAPTOP-ABC-1234"
+  "node_id": "LAPTOP-ABC-1234",
+  "manager_type": "daily"
 }
 ```
 
-**说明：** 登录时会自动注册/更新 AgentNode 记录，并检查 Manager 是否过期。
+**说明：** 登录时会自动注册/更新 AgentNode 记录，并检查 Manager 是否过期。`manager_type` 为该 Agent 所属管理员的类型（`daily`/`shuaka`/`duiyi`/`all`），客户端可据此决定可用的调度器类型。
 
 ---
 
@@ -1274,8 +1732,17 @@ Agent 登录（使用 Manager 凭据）。
 {
   "node_id": "LAPTOP-ABC-1234",
   "limit": 10,                    // 可选，默认 10
-  "lease_seconds": 90              // 可选，默认 90
+  "lease_seconds": 90,             // 可选，默认 90
+  "user_types": ["daily", "foster"]  // 可选，按用户类型过滤
 }
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `node_id` | string | 是 | 节点标识 |
+| `limit` | int | 否 | 最多返回任务数，默认 10 |
+| `lease_seconds` | int | 否 | 租约时长，默认 90 |
+| `user_types` | string[] | 否 | 按用户类型过滤，不传则不过滤。可选值：`daily`/`duiyi`/`shuaka`/`foster`/`jingzhi` |
 ```
 
 **响应：**
@@ -1465,7 +1932,7 @@ Agent 登录（使用 Manager 凭据）。
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | login_id | string | 用户的登录编号，对应本地 `putonglogindata/{login_id}/` 目录 |
-| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka`。duiyi 用户的 task_config 仅含"对弈竞猜" |
+| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka` / `foster` / `jingzhi`。duiyi 用户的 task_config 仅含"对弈竞猜"；foster 任务池同 daily；jingzhi 任务池同 daily + "组队御魂" |
 | task_config | object | 按用户类型标准化后的任务配置 |
 
 ---
@@ -1921,6 +2388,7 @@ WebSocket 连接，实时推送扫码状态变更。
 | `weekly_share` | 每周分享 |
 | `collect_fanhe_jiuhu` | 领取饭盒酒壶 |
 | `duiyi_jingcai` | 对弈竞猜 |
+| `team_yuhun` | 组队御魂（仅 jingzhi 用户） |
 | `init` | 初始化 |
 | `init_collect_reward` | 初始化-领取奖励 |
 | `init_rent_shikigami` | 初始化-租借式神 |
