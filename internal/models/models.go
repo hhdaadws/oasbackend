@@ -245,10 +245,10 @@ type AuditLog struct {
 
 type ScanJob struct {
 	ID            uint           `gorm:"primaryKey"`
-	ManagerID     uint           `gorm:"not null;index"`
-	UserID        uint           `gorm:"not null;index"`
+	ManagerID     uint           `gorm:"not null;index;index:idx_scan_jobs_manager_status,priority:1"`
+	UserID        uint           `gorm:"not null;index;index:idx_scan_jobs_user_status,priority:1"`
 	LoginID       string         `gorm:"size:64;not null;default:''"`
-	Status        string         `gorm:"size:30;not null;default:pending;index"`
+	Status        string         `gorm:"size:30;not null;default:pending;index;index:idx_scan_jobs_manager_status,priority:2;index:idx_scan_jobs_user_status,priority:2"`
 	Phase         string         `gorm:"size:30;not null;default:waiting"`
 	LeasedByNode  string         `gorm:"size:128"`
 	LeaseUntil    *time.Time
@@ -266,8 +266,8 @@ type Friendship struct {
 	ID        uint      `gorm:"primaryKey"`
 	ManagerID uint      `gorm:"not null;index:idx_friendship_manager"`
 	UserID    uint      `gorm:"not null;index:idx_friendship_user"` // 发起方
-	FriendID  uint      `gorm:"not null"`                          // 接收方
-	Status    string    `gorm:"size:20;not null;default:pending;index"`
+	FriendID  uint      `gorm:"not null;index:idx_friendship_friend_status,priority:1"`                          // 接收方
+	Status    string    `gorm:"size:20;not null;default:pending;index;index:idx_friendship_friend_status,priority:2"`
 	CreatedAt time.Time `gorm:"not null"`
 	UpdatedAt time.Time `gorm:"not null"`
 }
@@ -276,9 +276,9 @@ type TeamYuhunRequest struct {
 	ID              uint              `gorm:"primaryKey"`
 	ManagerID       uint              `gorm:"not null;index"`
 	RequesterID     uint              `gorm:"not null;index"` // 发起方 user_id
-	ReceiverID      uint              `gorm:"not null;index"` // 接收方 user_id
+	ReceiverID      uint              `gorm:"not null;index;index:idx_team_yuhun_receiver_status,priority:1"` // 接收方 user_id
 	ScheduledAt     time.Time         `gorm:"not null;index"` // 预约执行时间 (北京时间)
-	Status          string            `gorm:"size:20;not null;default:pending;index"`
+	Status          string            `gorm:"size:20;not null;default:pending;index;index:idx_team_yuhun_receiver_status,priority:2"`
 	RequesterRole   string            `gorm:"size:20;not null"`                       // driver / attacker
 	ReceiverRole    string            `gorm:"size:20"`                                // driver / attacker (接受时填写)
 	RequesterLineup datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}'"` // {group, position}

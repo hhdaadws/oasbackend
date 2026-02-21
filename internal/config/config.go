@@ -31,6 +31,9 @@ type Config struct {
 	DBMaxOpenConns     int
 	DBMaxIdleConns     int
 	DBConnMaxLifetime  time.Duration
+	RedisPoolSize      int
+	RedisMinIdleConns  int
+	RedisPoolTimeout   time.Duration
 	LogLevel           string
 	LogFormat          string
 }
@@ -59,6 +62,9 @@ func Load() Config {
 		DBMaxOpenConns:     getIntEnv("DB_MAX_OPEN_CONNS", 25),
 		DBMaxIdleConns:     getIntEnv("DB_MAX_IDLE_CONNS", 10),
 		DBConnMaxLifetime:  getDurationEnv("DB_CONN_MAX_LIFETIME", 30*time.Minute),
+		RedisPoolSize:      getIntEnv("REDIS_POOL_SIZE", 30),
+		RedisMinIdleConns:  getIntEnv("REDIS_MIN_IDLE_CONNS", 5),
+		RedisPoolTimeout:   getDurationEnv("REDIS_POOL_TIMEOUT", 5*time.Second),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
 		LogFormat:          getEnv("LOG_FORMAT", "text"),
 	}

@@ -33,6 +33,11 @@ func NewNotifier() *Notifier {
 	return &Notifier{
 		client: &http.Client{
 			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
 		},
 		minInterval: 15 * time.Second,
 	}

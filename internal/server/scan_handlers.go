@@ -448,20 +448,24 @@ func (s *Server) agentScanStart(c *gin.Context) {
 		return
 	}
 
+	// Load UserID once before update to avoid redundant SELECT after UPDATE
+	var job models.ScanJob
+	if err := s.db.Select("id, user_id").Where("id = ?", scanJobID).First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "扫码任务不存在"})
+		return
+	}
+
 	s.db.Model(&models.ScanJob{}).Where("id = ?", scanJobID).Updates(map[string]any{
 		"status":     models.ScanStatusRunning,
 		"phase":      models.ScanPhaseLaunching,
 		"updated_at": now,
 	})
 
-	// Notify user
-	var job models.ScanJob
-	if err := s.db.Where("id = ?", scanJobID).First(&job).Error; err == nil {
-		s.scanWSHub.NotifyUser(job.UserID, ScanWSMessage{
-			Type:  "phase_change",
-			Phase: models.ScanPhaseLaunching,
-		})
-	}
+	// Notify user using pre-loaded UserID
+	s.scanWSHub.NotifyUser(job.UserID, ScanWSMessage{
+		Type:  "phase_change",
+		Phase: models.ScanPhaseLaunching,
+	})
 
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"message": "ok"}})
 }
@@ -491,24 +495,28 @@ func (s *Server) agentScanPhase(c *gin.Context) {
 		return
 	}
 
+	// Load job once to get user_id and screenshots (avoids 2 redundant SELECTs)
+	var job models.ScanJob
+	if err := s.db.Select("id, user_id, screenshots").Where("id = ?", scanJobID).First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "扫码任务不存在"})
+		return
+	}
+
 	updates := map[string]any{
 		"phase":      req.Phase,
 		"updated_at": now,
 	}
 
-	// Store screenshot if provided
+	// Store screenshot if provided (using pre-loaded job.Screenshots)
 	if req.Screenshot != "" && req.ScreenshotKey != "" {
-		var job models.ScanJob
-		if err := s.db.Where("id = ?", scanJobID).First(&job).Error; err == nil {
-			var screenshots map[string]string
-			_ = json.Unmarshal(job.Screenshots, &screenshots)
-			if screenshots == nil {
-				screenshots = map[string]string{}
-			}
-			screenshots[req.ScreenshotKey] = req.Screenshot
-			screenshotsJSON, _ := json.Marshal(screenshots)
-			updates["screenshots"] = datatypes.JSON(screenshotsJSON)
+		var screenshots map[string]string
+		_ = json.Unmarshal(job.Screenshots, &screenshots)
+		if screenshots == nil {
+			screenshots = map[string]string{}
 		}
+		screenshots[req.ScreenshotKey] = req.Screenshot
+		screenshotsJSON, _ := json.Marshal(screenshots)
+		updates["screenshots"] = datatypes.JSON(screenshotsJSON)
 	}
 
 	s.db.Model(&models.ScanJob{}).Where("id = ?", scanJobID).Updates(updates)
@@ -521,25 +529,22 @@ func (s *Server) agentScanPhase(c *gin.Context) {
 	leaseTTL := time.Duration(leaseSeconds) * time.Second
 	_, _ = s.redisStore.RefreshScanLease(ctx, scanJobID, req.NodeID, leaseTTL)
 
-	// WebSocket push to user
-	var wsJob models.ScanJob
-	if err := s.db.Where("id = ?", scanJobID).First(&wsJob).Error; err == nil {
-		choiceTypes := map[string]string{
-			models.ScanPhaseChooseSystem: "system",
-			models.ScanPhaseChooseZone:   "zone",
-			models.ScanPhaseChooseRole:   "role",
-		}
-		var msg ScanWSMessage
-		if ct, ok := choiceTypes[req.Phase]; ok {
-			msg = ScanWSMessage{Type: "need_choice", Phase: req.Phase, ChoiceType: ct}
-		} else {
-			msg = ScanWSMessage{Type: "phase_change", Phase: req.Phase}
-		}
-		if req.Screenshot != "" {
-			msg.Screenshot = req.Screenshot
-		}
-		s.scanWSHub.NotifyUser(wsJob.UserID, msg)
+	// WebSocket push to user (using pre-loaded job.UserID)
+	choiceTypes := map[string]string{
+		models.ScanPhaseChooseSystem: "system",
+		models.ScanPhaseChooseZone:   "zone",
+		models.ScanPhaseChooseRole:   "role",
 	}
+	var msg ScanWSMessage
+	if ct, ok := choiceTypes[req.Phase]; ok {
+		msg = ScanWSMessage{Type: "need_choice", Phase: req.Phase, ChoiceType: ct}
+	} else {
+		msg = ScanWSMessage{Type: "phase_change", Phase: req.Phase}
+	}
+	if req.Screenshot != "" {
+		msg.Screenshot = req.Screenshot
+	}
+	s.scanWSHub.NotifyUser(job.UserID, msg)
 
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"message": "ok"}})
 }
@@ -667,6 +672,13 @@ func (s *Server) agentScanComplete(c *gin.Context) {
 		return
 	}
 
+	// Load UserID once before update
+	var job models.ScanJob
+	if err := s.db.Select("id, user_id").Where("id = ?", scanJobID).First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "扫码任务不存在"})
+		return
+	}
+
 	s.db.Model(&models.ScanJob{}).Where("id = ?", scanJobID).Updates(map[string]any{
 		"status":     models.ScanStatusSuccess,
 		"phase":      models.ScanPhaseDone,
@@ -675,15 +687,12 @@ func (s *Server) agentScanComplete(c *gin.Context) {
 
 	_ = s.redisStore.ReleaseScanLease(ctx, scanJobID, req.NodeID)
 
-	// WebSocket push
-	var job models.ScanJob
-	if err := s.db.Where("id = ?", scanJobID).First(&job).Error; err == nil {
-		s.scanWSHub.NotifyUser(job.UserID, ScanWSMessage{
-			Type:    "completed",
-			Phase:   models.ScanPhaseDone,
-			Message: req.Message,
-		})
-	}
+	// WebSocket push using pre-loaded UserID
+	s.scanWSHub.NotifyUser(job.UserID, ScanWSMessage{
+		Type:    "completed",
+		Phase:   models.ScanPhaseDone,
+		Message: req.Message,
+	})
 
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"message": "ok"}})
 }

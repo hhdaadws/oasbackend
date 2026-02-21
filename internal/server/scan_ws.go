@@ -148,15 +148,36 @@ func (s *Server) userScanWS(c *gin.Context) {
 
 	hash := auth.HashToken(tokenStr)
 	now := time.Now().UTC()
-	var token models.UserToken
-	if err := s.db.Where("token_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, now).First(&token).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid token"})
-		return
-	}
-	var user models.User
-	if err := s.db.Where("id = ? AND status = ?", token.UserID, models.UserStatusActive).First(&user).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid user"})
-		return
+	ctx := c.Request.Context()
+	var userID uint
+
+	// Try Redis cache first (same pattern as requireUserToken middleware)
+	if cachedUserID, _, cachedStatus, cachedExpiresAt, cachedTokenExpiresAt, _, found, err :=
+		s.redisStore.GetUserTokenCache(ctx, hash); err == nil && found {
+		if cachedTokenExpiresAt.Before(now) || cachedStatus != models.UserStatusActive ||
+			cachedExpiresAt.IsZero() || !cachedExpiresAt.After(now) {
+			c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid token"})
+			return
+		}
+		userID = cachedUserID
+	} else {
+		// Cache miss: fall back to DB queries
+		var token models.UserToken
+		if err := s.db.Where("token_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, now).First(&token).Error; err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid token"})
+			return
+		}
+		var user models.User
+		if err := s.db.Where("id = ? AND status = ?", token.UserID, models.UserStatusActive).First(&user).Error; err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"detail": "invalid user"})
+			return
+		}
+		userID = user.ID
+		// Populate cache for future requests
+		if user.ExpiresAt != nil {
+			_ = s.redisStore.SetUserTokenCache(ctx, hash, user.ID, user.ManagerID,
+				user.Status, *user.ExpiresAt, token.ExpiresAt, token.ID, 2*time.Minute)
+		}
 	}
 
 	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
@@ -165,7 +186,7 @@ func (s *Server) userScanWS(c *gin.Context) {
 		return
 	}
 
-	client := s.scanWSHub.Register(user.ID, conn)
+	client := s.scanWSHub.Register(userID, conn)
 	go client.WritePump()
 	go client.ReadPump(s.scanWSHub)
 }

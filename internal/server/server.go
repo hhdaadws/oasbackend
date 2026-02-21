@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,42 +37,46 @@ import (
 var staticFS embed.FS
 
 type Server struct {
-	cfg          config.Config
-	db           *gorm.DB
-	redisStore   cache.Store
-	generator    *scheduler.Generator
-	tokenManager *auth.TokenManager
-	router       *gin.Engine
-	auditCh      chan models.AuditLog
-	notifyCh     chan notify.NotifyRequest
-	notifier     *notify.Notifier
-	scanWSHub    *ScanWSHub
+	cfg              config.Config
+	db               *gorm.DB
+	redisStore       cache.Store
+	generator        *scheduler.Generator
+	tokenManager     *auth.TokenManager
+	router           *gin.Engine
+	auditCh          chan models.AuditLog
+	auditOverflowSem chan struct{}
+	notifyCh         chan notify.NotifyRequest
+	notifier         *notify.Notifier
+	scanWSHub        *ScanWSHub
 }
 
 var errInvalidTaskConfigPatch = errors.New("invalid task config patch")
 
 func New(cfg config.Config, db *gorm.DB, redisStore cache.Store) *Server {
 	app := &Server{
-		cfg:          cfg,
-		db:           db,
-		redisStore:   redisStore,
-		tokenManager: auth.NewTokenManager(cfg.JWTSecret),
-		router:       gin.New(),
-		auditCh:      make(chan models.AuditLog, 1024),
-		notifyCh:     make(chan notify.NotifyRequest, 256),
-		notifier:     notify.NewNotifier(),
-		scanWSHub:    newScanWSHub(),
+		cfg:              cfg,
+		db:               db,
+		redisStore:       redisStore,
+		tokenManager:     auth.NewTokenManager(cfg.JWTSecret),
+		router:           gin.New(),
+		auditCh:          make(chan models.AuditLog, 1024),
+		auditOverflowSem: make(chan struct{}, 10),
+		notifyCh:         make(chan notify.NotifyRequest, 1024),
+		notifier:         notify.NewNotifier(),
+		scanWSHub:        newScanWSHub(),
 	}
 	if cfg.SchedulerEnabled {
 		app.generator = scheduler.NewGenerator(cfg, db, redisStore)
 		app.generator.Start()
 	}
 	go app.auditWorker()
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 8; i++ {
 		go app.notifyWorker()
 	}
 	go app.scanJobTimeoutWorker()
-	app.router.Use(gin.Logger(), gin.Recovery(), gzip.Gzip(gzip.BestSpeed))
+	app.router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{"/health"},
+	}), gin.Recovery(), gzip.Gzip(gzip.BestSpeed))
 	app.mountRoutes()
 	return app
 }
@@ -118,7 +123,23 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) mountRoutes() {
+	var (
+		healthMu     sync.Mutex
+		lastCheck    time.Time
+		cachedResult gin.H
+		cachedCode   int
+	)
+
 	s.router.GET("/health", func(c *gin.Context) {
+		healthMu.Lock()
+		if time.Since(lastCheck) < 5*time.Second && cachedResult != nil {
+			result, code := cachedResult, cachedCode
+			healthMu.Unlock()
+			c.JSON(code, result)
+			return
+		}
+		healthMu.Unlock()
+
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()
 
@@ -148,6 +169,12 @@ func (s *Server) mountRoutes() {
 		} else {
 			status["db"] = "up"
 		}
+
+		healthMu.Lock()
+		cachedResult = status
+		cachedCode = httpStatus
+		lastCheck = time.Now()
+		healthMu.Unlock()
 
 		c.JSON(httpStatus, status)
 	})
@@ -2171,7 +2198,7 @@ func (s *Server) managerBatchUserAssets(c *gin.Context) {
 	now := time.Now().UTC()
 	var updated int64
 
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err := s.db.Session(&gorm.Session{PrepareStmt: true}).Transaction(func(tx *gorm.DB) error {
 		var users []models.User
 		if err := tx.Where("id IN ? AND manager_id = ?", req.UserIDs, managerID).Find(&users).Error; err != nil {
 			return err
@@ -3231,15 +3258,25 @@ func (s *Server) triggerTaskNotification(jobID uint, eventType string, message s
 		return
 	}
 
-	select {
-	case s.notifyCh <- notify.NotifyRequest{
+	req := notify.NotifyRequest{
 		UserID:    job.UserID,
 		TaskType:  job.TaskType,
 		EventType: eventType,
 		Message:   message,
-	}:
+	}
+
+	select {
+	case s.notifyCh <- req:
 	default:
-		slog.Warn("notify channel full, dropping notification", "job_id", jobID)
+		// Retry once after short delay rather than dropping immediately
+		go func() {
+			time.Sleep(2 * time.Second)
+			select {
+			case s.notifyCh <- req:
+			default:
+				slog.Warn("notify channel still full after retry, dropping notification", "job_id", jobID)
+			}
+		}()
 	}
 }
 
@@ -3893,11 +3930,17 @@ func (s *Server) audit(actorType string, actorID uint, action, targetType string
 	select {
 	case s.auditCh <- entry:
 	default:
-		// Channel full, write asynchronously to avoid blocking the request
-		go func() {
-			_ = s.db.Create(&entry).Error
-		}()
-		slog.Warn("audit channel full, async fallback", "action", entry.Action)
+		// Channel full, write asynchronously with bounded concurrency
+		select {
+		case s.auditOverflowSem <- struct{}{}:
+			go func() {
+				defer func() { <-s.auditOverflowSem }()
+				_ = s.db.Create(&entry).Error
+			}()
+			slog.Warn("audit channel full, async fallback", "action", entry.Action)
+		default:
+			slog.Warn("audit overflow limit reached, dropping log", "action", entry.Action)
+		}
 	}
 }
 
