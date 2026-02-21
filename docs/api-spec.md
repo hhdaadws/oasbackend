@@ -1434,9 +1434,10 @@ Agent 登录（使用 Manager 凭据）。
 {
   "data": {
     "login_id": "1",
+    "user_type": "daily",
     "task_config": {
-      "signin": {"enabled": true, "priority": 50},
-      "explore": {"enabled": true, "priority": 30}
+      "签到": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
+      "探索突破": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_8h"}
     },
     "rest_config": {
       "enabled": true,
@@ -1464,6 +1465,8 @@ Agent 登录（使用 Manager 凭据）。
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | login_id | string | 用户的登录编号，对应本地 `putonglogindata/{login_id}/` 目录 |
+| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka`。duiyi 用户的 task_config 仅含"对弈竞猜" |
+| task_config | object | 按用户类型标准化后的任务配置 |
 
 ---
 

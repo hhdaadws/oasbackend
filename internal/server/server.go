@@ -3144,14 +3144,18 @@ func (s *Server) agentGetUserFullConfig(c *gin.Context) {
 		return
 	}
 
+	userType := models.NormalizeUserType(user.UserType)
+
 	var cfg models.UserTaskConfig
 	taskConfig := map[string]any{}
 	if err := s.db.Where("user_id = ?", userID).First(&cfg).Error; err == nil {
 		taskConfig = map[string]any(cfg.TaskConfig)
 	}
+	taskConfig = taskmeta.NormalizeTaskConfigByType(taskConfig, userType)
 
 	c.JSON(http.StatusOK, gin.H{
 		"login_id":         user.LoginID,
+		"user_type":        userType,
 		"task_config":      taskConfig,
 		"rest_config":      user.RestConfig,
 		"lineup_config":    user.LineupConfig,
@@ -3495,7 +3499,56 @@ func (s *Server) mergeTaskConfig(userID uint, patch map[string]any) (*models.Use
 		}
 
 		base := taskmeta.NormalizeTaskConfigByType(map[string]any(cfg.TaskConfig), userType)
+
+		// Snapshot old next_time values before merge
+		oldNextTimes := make(map[string]string)
+		for taskType, rawCfg := range base {
+			if taskMap, ok := rawCfg.(map[string]any); ok {
+				if nt, ok := taskMap["next_time"].(string); ok {
+					oldNextTimes[taskType] = nt
+				}
+			}
+		}
+
 		merged := deepMergeMap(base, filteredPatch)
+
+		// Detect next_time changes and expire stale pending tasks
+		var changedTaskTypes []string
+		for taskType, rawCfg := range merged {
+			if taskMap, ok := rawCfg.(map[string]any); ok {
+				newNT, _ := taskMap["next_time"].(string)
+				if newNT != oldNextTimes[taskType] {
+					changedTaskTypes = append(changedTaskTypes, taskType)
+				}
+			}
+		}
+		if len(changedTaskTypes) > 0 {
+			activeStatuses := []string{models.JobStatusPending}
+			var staleJobs []models.TaskJob
+			if err := tx.Where("user_id = ? AND task_type IN ? AND status IN ?",
+				userID, changedTaskTypes, activeStatuses).
+				Find(&staleJobs).Error; err == nil && len(staleJobs) > 0 {
+				staleIDs := make([]uint, 0, len(staleJobs))
+				for _, job := range staleJobs {
+					staleIDs = append(staleIDs, job.ID)
+				}
+				_ = tx.Model(&models.TaskJob{}).Where("id IN ?", staleIDs).
+					Updates(map[string]any{"status": models.JobStatusFailed, "updated_at": now}).Error
+				events := make([]models.TaskJobEvent, 0, len(staleIDs))
+				for _, id := range staleIDs {
+					events = append(events, models.TaskJobEvent{
+						JobID:     id,
+						EventType: "expired",
+						Message:   "任务时间已变更，自动失败",
+						EventAt:   now,
+					})
+				}
+				if len(events) > 0 {
+					_ = tx.Create(&events).Error
+				}
+			}
+		}
+
 		cfg.TaskConfig = datatypes.JSONMap(merged)
 		cfg.UpdatedAt = now
 		cfg.Version = cfg.Version + 1

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
@@ -103,6 +104,13 @@ func (g *Generator) runOnce(ctx context.Context) {
 	generated := 0
 	scanned := 0
 	var runErr error
+
+	// Expire stale 对弈竞猜 pending jobs whose window has passed (runs even during rest window)
+	if expired, err := g.expireStaleDuiyiJobs(now); err != nil {
+		slog.Warn("expire stale duiyi jobs failed", "error", err)
+	} else if expired > 0 {
+		slog.Info("expired stale duiyi jobs", "count", expired)
+	}
 
 	// Rest window: skip generation during Beijing time 00:00–05:59
 	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
@@ -490,4 +498,74 @@ func currentDuiyiWindow(bjHour int) string {
 		}
 	}
 	return result
+}
+
+// duiyiWindowStartForTime returns the start time of the duiyi window that
+// contains the given Beijing time. Returns zero time if outside 10:00–23:59.
+func duiyiWindowStartForTime(bjTime time.Time) time.Time {
+	h := bjTime.Hour()
+	if h < 10 {
+		return time.Time{}
+	}
+	windowHour := (h / 2) * 2
+	if windowHour < 10 {
+		windowHour = 10
+	}
+	return time.Date(bjTime.Year(), bjTime.Month(), bjTime.Day(), windowHour, 0, 0, 0, taskmeta.BJLoc)
+}
+
+// expireStaleDuiyiJobs expires pending 对弈竞猜 tasks whose execution window
+// has passed. A task is stale if the current window start time is after the
+// task's window start time.
+func (g *Generator) expireStaleDuiyiJobs(now time.Time) (int64, error) {
+	bjNow := now.In(taskmeta.BJLoc)
+	currentWindowStart := duiyiWindowStartForTime(bjNow)
+
+	var staleTasks []models.TaskJob
+	if err := g.db.Where("status = ? AND task_type = ?",
+		models.JobStatusPending, "对弈竞猜").
+		Find(&staleTasks).Error; err != nil {
+		return 0, err
+	}
+	if len(staleTasks) == 0 {
+		return 0, nil
+	}
+
+	staleIDs := make([]uint, 0, len(staleTasks))
+	for _, job := range staleTasks {
+		jobBJ := job.ScheduledAt.In(taskmeta.BJLoc)
+		jobWindowStart := duiyiWindowStartForTime(jobBJ)
+		// If the job was created outside any window (before 10:00), it's stale.
+		// If the current window start is after the job's window start, it's stale.
+		if jobWindowStart.IsZero() || currentWindowStart.After(jobWindowStart) {
+			staleIDs = append(staleIDs, job.ID)
+		}
+	}
+	if len(staleIDs) == 0 {
+		return 0, nil
+	}
+
+	if err := g.db.Model(&models.TaskJob{}).
+		Where("id IN ?", staleIDs).
+		Updates(map[string]any{
+			"status":     models.JobStatusFailed,
+			"updated_at": now,
+		}).Error; err != nil {
+		return 0, err
+	}
+
+	events := make([]models.TaskJobEvent, 0, len(staleIDs))
+	for _, id := range staleIDs {
+		events = append(events, models.TaskJobEvent{
+			JobID:     id,
+			EventType: "expired",
+			Message:   "执行窗口已过，自动失败",
+			EventAt:   now,
+		})
+	}
+	if len(events) > 0 {
+		_ = g.db.Create(&events).Error
+	}
+
+	return int64(len(staleIDs)), nil
 }
