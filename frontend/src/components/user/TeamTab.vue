@@ -226,7 +226,7 @@ async function rejectRequest(req) {
 
 async function cancelRequest(req) {
   try {
-    await ElMessageBox.confirm("确定要取消该组队请求吗？对方将看到"已取消"状态。", "确认取消", {
+    await ElMessageBox.confirm('确定要取消该组队请求吗？对方将看到"已取消"状态。', "确认取消", {
       confirmButtonText: "确定",
       cancelButtonText: "取消",
       type: "warning",
