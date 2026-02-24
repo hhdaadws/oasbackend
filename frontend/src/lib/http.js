@@ -431,6 +431,8 @@ export const userApi = {
   // Team Yuhun
   getTeamYuhunRequests: (token) =>
     request({ method: "GET", url: "/user/team-yuhun/requests", headers: withBearer(token) }),
+  getTeamYuhunBookedSlots: (token) =>
+    request({ method: "GET", url: "/user/team-yuhun/booked-slots", headers: withBearer(token) }),
   sendTeamYuhunRequest: (token, payload) =>
     request({ method: "POST", url: "/user/team-yuhun/request", data: payload, headers: withBearer(token) }),
   acceptTeamYuhunRequest: (token, id, payload) =>

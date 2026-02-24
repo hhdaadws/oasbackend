@@ -287,6 +287,7 @@ func (s *Server) mountRoutes() {
 		// Team Yuhun (jingzhi users only)
 		userGroup.POST("/team-yuhun/request", s.userSendTeamYuhunRequest)
 		userGroup.GET("/team-yuhun/requests", s.userListTeamYuhunRequests)
+		userGroup.GET("/team-yuhun/booked-slots", s.userListTeamYuhunBookedSlots)
 		userGroup.POST("/team-yuhun/:id/accept", s.userAcceptTeamYuhunRequest)
 		userGroup.POST("/team-yuhun/:id/reject", s.userRejectTeamYuhunRequest)
 		userGroup.DELETE("/team-yuhun/:id", s.userCancelTeamYuhunRequest)
@@ -4979,6 +4980,19 @@ func (s *Server) userSendTeamYuhunRequest(c *gin.Context) {
 		return
 	}
 
+	// Check for time slot conflicts within the same manager (±30 minutes)
+	var timeConflict int64
+	s.db.Model(&models.TeamYuhunRequest{}).Where(
+		"manager_id = ? AND status IN ? AND ABS(EXTRACT(EPOCH FROM (scheduled_at - ?::timestamptz))) < 1800",
+		user.ManagerID,
+		[]string{models.TeamYuhunStatusPending, models.TeamYuhunStatusAccepted},
+		scheduledAt.Format(time.RFC3339),
+	).Count(&timeConflict)
+	if timeConflict > 0 {
+		c.JSON(http.StatusConflict, gin.H{"detail": "该时间段已有其他用户预约（±30分钟内），请选择其他时间"})
+		return
+	}
+
 	now := time.Now().UTC()
 	teamReq := models.TeamYuhunRequest{
 		ManagerID:       user.ManagerID,
@@ -5074,6 +5088,32 @@ func (s *Server) userListTeamYuhunRequests(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
+func (s *Server) userListTeamYuhunBookedSlots(c *gin.Context) {
+	user := s.requireJingzhiUser(c)
+	if user == nil {
+		return
+	}
+
+	// 返回同一 manager 下所有 pending/accepted 请求的预约时间（排除当前用户自己的请求）
+	var requests []models.TeamYuhunRequest
+	if err := s.db.Select("scheduled_at").Where(
+		"manager_id = ? AND status IN ? AND requester_id != ? AND receiver_id != ?",
+		user.ManagerID,
+		[]string{models.TeamYuhunStatusPending, models.TeamYuhunStatusAccepted},
+		user.ID, user.ID,
+	).Find(&requests).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "获取已预约时间失败"})
+		return
+	}
+
+	slots := make([]string, 0, len(requests))
+	for _, r := range requests {
+		slots = append(slots, r.ScheduledAt.UTC().Format(time.RFC3339))
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"booked_slots": slots}})
+}
+
 func (s *Server) userAcceptTeamYuhunRequest(c *gin.Context) {
 	user := s.requireJingzhiUser(c)
 	if user == nil {
@@ -5164,19 +5204,26 @@ func (s *Server) userCancelTeamYuhunRequest(c *gin.Context) {
 	}
 
 	var teamReq models.TeamYuhunRequest
-	if err := s.db.Where("id = ? AND requester_id = ? AND status IN ?", id, user.ID,
+	// 双方（发起方或接收方）均可取消 pending 或 accepted 状态的请求
+	if err := s.db.Where(
+		"id = ? AND (requester_id = ? OR receiver_id = ?) AND status IN ?",
+		id, user.ID, user.ID,
 		[]string{models.TeamYuhunStatusPending, models.TeamYuhunStatusAccepted},
 	).First(&teamReq).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "组队请求不存在或无法取消"})
 		return
 	}
 
-	if err := s.db.Delete(&teamReq).Error; err != nil {
+	now := time.Now().UTC()
+	if err := s.db.Model(&teamReq).Updates(map[string]any{
+		"status":     models.TeamYuhunStatusCancelled,
+		"updated_at": now,
+	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "取消组队请求失败"})
 		return
 	}
 
 	s.audit(models.ActorTypeUser, user.ID, "team_yuhun_request_cancel", "team_yuhun_request", teamReq.ID,
-		datatypes.JSONMap{"receiver_id": teamReq.ReceiverID}, c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
+		datatypes.JSONMap{"requester_id": teamReq.RequesterID, "receiver_id": teamReq.ReceiverID}, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": teamReq.ID, "status": models.TeamYuhunStatusCancelled}})
 }

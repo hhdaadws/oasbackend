@@ -177,7 +177,7 @@ async function saveDuiyiSource() {
       <el-table :data="filteredTaskRows" border stripe empty-text="暂无可配置任务" :row-class-name="tableRowClassName">
         <el-table-column type="expand">
           <template #default="scope">
-            <div v-if="isSpecialTask(scope.row.name)" class="expand-config">
+            <div v-if="isSpecialTask(scope.row.name)" class="expand-config" @click.stop>
               <!-- 探索突破 -->
               <template v-if="scope.row.name === '探索突破'">
                 <div class="expand-row">

@@ -1594,18 +1594,30 @@ Manager 使用续费密钥续期。
 **响应：**
 ```json
 {
-  "requests": [
+  "data": [
     {
       "id": 1,
-      "is_requester": true,
-      "partner_account_no": "9876543210",
+      "direction": "sent",
       "scheduled_at": "2026-02-22T18:00:00+08:00",
       "status": "pending",
-      "requester_role": "driver",
-      "receiver_role": "",
-      "requester_lineup": {"group": 1, "position": 2},
-      "receiver_lineup": {},
-      "created_at": "2026-02-21T10:00:00Z"
+      "requester": {
+        "user_id": 1,
+        "account_no": "1234567890",
+        "username": "Alice",
+        "server": "官服",
+        "role": "driver",
+        "lineup": {"group": 1, "position": 2}
+      },
+      "receiver": {
+        "user_id": 2,
+        "account_no": "9876543210",
+        "username": "Bob",
+        "server": "官服",
+        "role": "",
+        "lineup": {}
+      },
+      "created_at": "2026-02-21T10:00:00Z",
+      "updated_at": "2026-02-21T10:00:00Z"
     }
   ]
 }
@@ -1613,12 +1625,32 @@ Manager 使用续费密钥续期。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `is_requester` | bool | 是否为发起方 |
-| `status` | string | `pending` / `accepted` / `rejected` / `completed` / `expired` |
-| `requester_role` | string | 发起方角色：`driver`（司机）/ `attacker`（打手） |
-| `receiver_role` | string | 接收方角色（接受时填写） |
-| `requester_lineup` | object | 发起方阵容 `{group, position}`，0 = 未配置 |
-| `receiver_lineup` | object | 接收方阵容 |
+| `direction` | string | `sent`（我是发起方）/ `received`（我是接收方） |
+| `status` | string | `pending` / `accepted` / `rejected` / `cancelled` / `completed` / `expired` |
+| `requester.role` | string | 发起方角色：`driver`（司机）/ `attacker`（打手） |
+| `receiver.role` | string | 接收方角色（接受时填写） |
+| `requester.lineup` | object | 发起方阵容 `{group, position}`，0 = 未配置 |
+| `receiver.lineup` | object | 接收方阵容 |
+
+---
+
+#### GET /api/v1/user/team-yuhun/booked-slots
+
+获取同一 manager 下其他用户已预约的时间段列表，用于时间冲突判断（排除当前用户自己的请求）。
+
+**响应：**
+```json
+{
+  "data": {
+    "booked_slots": [
+      "2026-02-22T18:00:00Z",
+      "2026-02-23T10:00:00Z"
+    ]
+  }
+}
+```
+
+**说明：** 返回所有 pending / accepted 状态请求的 `scheduled_at`（UTC RFC3339 格式）。前端可用于 ±30 分钟冲突检测。
 
 ---
 
@@ -1639,18 +1671,18 @@ Manager 使用续费密钥续期。
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `friend_id` | uint | 是 | 好友的 user_id（必须是已接受的好友） |
-| `scheduled_at` | datetime | 是 | 预约执行时间（必须在未来） |
+| `scheduled_at` | datetime | 是 | 预约执行时间（必须在未来，RFC3339 格式） |
 | `role` | string | 是 | 自己的角色：`driver` / `attacker` |
 | `lineup` | object | 是 | 阵容配置 `{group: 0-7, position: 0-7}` |
 
-**响应 201：**
+**响应 200：**
 ```json
-{"message": "组队请求已发送"}
+{"data": {"id": 1, "status": "pending"}}
 ```
 
 **错误响应：**
 - `400` — 对方不是好友 / 角色无效 / 时间已过
-- `409` — 已有相同时段的待处理请求
+- `409` — 已有相同好友间的待处理请求，或该时间段内（±30分钟）已有其他用户预约
 
 ---
 
@@ -1668,7 +1700,7 @@ Manager 使用续费密钥续期。
 
 **响应：**
 ```json
-{"message": "已接受组队请求"}
+{"data": {"id": 1, "status": "accepted"}}
 ```
 
 **说明：** 接收方角色必须与发起方不同（一个司机一个打手）。
@@ -1681,18 +1713,18 @@ Manager 使用续费密钥续期。
 
 **响应：**
 ```json
-{"message": "已拒绝组队请求"}
+{"data": {"id": 1, "status": "rejected"}}
 ```
 
 ---
 
 #### DELETE /api/v1/user/team-yuhun/:id
 
-取消组队请求（仅发起方可取消 pending 状态的请求）。
+取消组队请求（发起方或接收方均可取消 `pending` / `accepted` 状态的请求）。取消后状态变为 `cancelled`，双方均可在列表中看到已取消状态（非硬删除）。
 
 **响应：**
 ```json
-{"message": "组队请求已取消"}
+{"data": {"id": 1, "status": "cancelled"}}
 ```
 
 ---
@@ -1940,7 +1972,7 @@ Agent 登录（使用 Manager 凭据）。
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | login_id | string | 用户的登录编号，对应本地 `putonglogindata/{login_id}/` 目录 |
-| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka` / `foster` / `jingzhi`。duiyi 用户的 task_config 仅含"对弈竞猜"；foster 任务池同 daily；jingzhi 任务池同 daily + "组队御魂" |
+| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka` / `foster` / `jingzhi`。duiyi 用户的 task_config 仅含"对弈竞猜"；foster 任务池同 daily；jingzhi 任务池同 daily（"组队御魂"由系统调度，不在 task_config 中配置，通过 TeamTab 独立管理） |
 | task_config | object | 按用户类型标准化后的任务配置 |
 
 ---

@@ -30,6 +30,7 @@ const (
 	TeamYuhunStatusPending   = "pending"
 	TeamYuhunStatusAccepted  = "accepted"
 	TeamYuhunStatusRejected  = "rejected"
+	TeamYuhunStatusCancelled = "cancelled"
 	TeamYuhunStatusCompleted = "completed"
 	TeamYuhunStatusExpired   = "expired"
 

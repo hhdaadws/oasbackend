@@ -141,7 +141,7 @@ var fosterTaskOrder = []string{
 	"对弈竞猜",
 }
 
-// jingzhi task pool: same as daily + 组队御魂.
+// jingzhi task pool: same as daily (组队御魂 is system-managed via TeamTab, not in config).
 var jingzhiTaskOrder = []string{
 	"寄养",
 	"悬赏",
@@ -168,7 +168,6 @@ var jingzhiTaskOrder = []string{
 	"领取饭盒酒壶",
 	"斗技",
 	"对弈竞猜",
-	"组队御魂",
 }
 
 var defaultTaskConfig = map[string]map[string]any{
