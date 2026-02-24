@@ -334,7 +334,8 @@ Agent 登录（使用 Manager 凭据）。
     "user_type": "daily",
     "task_config": {
       "签到": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
-      "探索突破": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_8h"}
+      "探索突破": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_8h"},
+      "寄养": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_6h", "foster_priority": "gouyu", "custom_priority": ["6xtg","6xdy","5xtg","5xdy","4xtg","4xdy"]}
     },
     "rest_config": {
       "enabled": true,
@@ -364,6 +365,13 @@ Agent 登录（使用 Manager 凭据）。
 | login_id | string | 用户的登录编号，对应本地 `putonglogindata/{login_id}/` 目录 |
 | user_type | string | 用户类型：`daily` / `duiyi` / `shuaka` / `foster` / `jingzhi`。duiyi 用户的 task_config 仅含"对弈竞猜"；foster 任务池同 daily；jingzhi 任务池同 daily + "组队御魂" |
 | task_config | object | 按用户类型标准化后的任务配置 |
+
+**寄养任务专属字段：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `foster_priority` | string | 寄养优先级模式：`gouyu`(勾玉优先)、`tili`(体力优先)、`custom`(自定义) |
+| `custom_priority` | string[] | 自定义优先级排序，可选值：`6xtg`、`6xdy`、`5xtg`、`5xdy`、`4xtg`、`4xdy` |
 
 ---
 

@@ -172,11 +172,11 @@ var jingzhiTaskOrder = []string{
 }
 
 var defaultTaskConfig = map[string]map[string]any{
-	"寄养":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_6h"},
+	"寄养":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_6h", "foster_priority": "gouyu", "custom_priority": []any{"6xtg", "6xdy", "5xtg", "5xdy", "4xtg", "4xdy"}},
 	"悬赏":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
 	"弥助":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
 	"勾协":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
-	"探索突破":    {"enabled": true, "sub_explore": true, "sub_tupo": true, "stamina_threshold": 1000, "difficulty": "normal", "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_8h"},
+	"探索突破":    {"enabled": true, "sub_explore": true, "sub_tupo": true, "stamina_threshold": 1000, "difficulty": "normal", "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_8h", "allowed_interrupts": []any{"寄养"}},
 	"结界卡合成":   {"enabled": true, "explore_count": 0, "next_time_rule": "daily_reset"},
 	"加好友":     {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
 	"领取登录礼包":  {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},

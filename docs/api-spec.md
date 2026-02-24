@@ -877,12 +877,20 @@ Manager 使用续费密钥续期。
   "data": {
     "task_config": {
       "signin": {"enabled": true, "priority": 50, "next_time": "2025-01-02 00:01"},
-      "explore": {"enabled": true, "priority": 30}
+      "explore": {"enabled": true, "priority": 30},
+      "寄养": {"enabled": true, "next_time": "2025-01-01 00:00", "fail_delay": 30, "foster_priority": "gouyu", "custom_priority": ["6xtg","6xdy","5xtg","5xdy","4xtg","4xdy"]}
     },
     "version": 3
   }
 }
 ```
+
+**寄养任务专属字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `foster_priority` | string | 寄养优先级模式：`gouyu`(勾玉优先)、`tili`(体力优先)、`custom`(自定义) |
+| `custom_priority` | string[] | 自定义优先级排序，可选值：`6xtg`、`6xdy`、`5xtg`、`5xdy`、`4xtg`、`4xdy` |
 
 ---
 

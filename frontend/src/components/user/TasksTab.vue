@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { ElMessage } from "element-plus";
 import { parseApiError, userApi } from "../../lib/http";
-import { userTypeLabel, ensureTaskConfig, parseTaskConfigFromRaw, SPECIAL_TASK_NAMES } from "../../lib/helpers";
+import { userTypeLabel, ensureTaskConfig, parseTaskConfigFromRaw, SPECIAL_TASK_NAMES, INTERRUPTABLE_TASK_OPTIONS, FOSTER_REWARD_OPTIONS } from "../../lib/helpers";
 import { useTaskTemplates } from "../../composables/useTaskTemplates";
 import LineupTab from "./LineupTab.vue";
 
@@ -186,6 +186,18 @@ async function saveDuiyiSource() {
                   <span class="expand-label">体力阈值:</span>
                   <el-input-number v-model="scope.row.config.stamina_threshold" :min="0" :max="99999" size="small" class="w-120" @change="saveOneTask(scope.row)" />
                 </div>
+                <div class="expand-row" style="margin-top: 8px;">
+                  <span class="expand-label">中断白名单:</span>
+                  <el-select
+                    v-model="scope.row.config.allowed_interrupts"
+                    multiple collapse-tags collapse-tags-tooltip
+                    placeholder="允许中断的任务" size="small"
+                    style="width: 320px"
+                    @change="saveOneTask(scope.row)"
+                  >
+                    <el-option v-for="t in INTERRUPTABLE_TASK_OPTIONS" :key="t" :label="t" :value="t" />
+                  </el-select>
+                </div>
               </template>
               <!-- 结界卡合成 -->
               <template v-else-if="scope.row.name === '结界卡合成'">
@@ -254,6 +266,30 @@ async function saveDuiyiSource() {
                     @change="saveDuiyiSource"
                   >
                     <el-option v-for="b in duiyiBloggers" :key="b.id" :label="b.name" :value="b.id" />
+                  </el-select>
+                </div>
+              </template>
+              <!-- 寄养 -->
+              <template v-else-if="scope.row.name === '寄养'">
+                <div class="expand-row">
+                  <span class="expand-label">优先级:</span>
+                  <el-select v-model="scope.row.config.foster_priority" size="small" class="w-120" @change="saveOneTask(scope.row)">
+                    <el-option label="勾玉优先" value="gouyu" />
+                    <el-option label="体力优先" value="tili" />
+                    <el-option label="自定义" value="custom" />
+                  </el-select>
+                </div>
+                <div v-if="scope.row.config.foster_priority === 'custom'" class="expand-row" style="margin-top: 8px;">
+                  <span class="expand-label">自定义顺序:</span>
+                  <el-select
+                    v-model="scope.row.config.custom_priority"
+                    multiple
+                    placeholder="选择并排序奖励优先级"
+                    size="small"
+                    style="width: 320px"
+                    @change="saveOneTask(scope.row)"
+                  >
+                    <el-option v-for="r in FOSTER_REWARD_OPTIONS" :key="r.value" :label="r.label" :value="r.value" />
                   </el-select>
                 </div>
               </template>
