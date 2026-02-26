@@ -263,6 +263,130 @@ func TestRedeemSameTypeCodeExtendsExpiry(t *testing.T) {
 	}
 }
 
+func TestFosterUserTaskPool(t *testing.T) {
+	srv, db := setupTestServer(t)
+	manager := createActiveManager(t, db, "manager_foster_pool", "passwordFosterPool123")
+	managerToken := loginManagerToken(t, srv, manager.Username, "passwordFosterPool123")
+
+	createCodeResp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodPost,
+		"/api/v1/manager/activation-codes",
+		map[string]any{
+			"duration_days": 30,
+			"user_type":     "foster",
+		},
+		managerToken,
+	)
+	if createCodeResp.Code != http.StatusCreated {
+		t.Fatalf("create foster activation code failed, status=%d body=%s", createCodeResp.Code, createCodeResp.Body.String())
+	}
+	code := decodeBodyMap(t, createCodeResp.Body.Bytes())["code"].(string)
+
+	registerResp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodPost,
+		"/api/v1/user/auth/register-by-code",
+		map[string]any{"code": code},
+		"",
+	)
+	if registerResp.Code != http.StatusCreated {
+		t.Fatalf("register by foster code failed, status=%d body=%s", registerResp.Code, registerResp.Body.String())
+	}
+	registerPayload := decodeBodyMap(t, registerResp.Body.Bytes())
+	if registerPayload["user_type"] != "foster" {
+		t.Fatalf("expected user_type=foster, got %v", registerPayload["user_type"])
+	}
+	userToken := registerPayload["token"].(string)
+
+	taskResp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodGet,
+		"/api/v1/user/me/tasks",
+		nil,
+		userToken,
+	)
+	if taskResp.Code != http.StatusOK {
+		t.Fatalf("get me tasks failed, status=%d body=%s", taskResp.Code, taskResp.Body.String())
+	}
+	taskPayload := decodeBodyMap(t, taskResp.Body.Bytes())
+	if taskPayload["user_type"] != "foster" {
+		t.Fatalf("expected task user_type=foster, got %v", taskPayload["user_type"])
+	}
+	taskConfig, ok := taskPayload["task_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("task_config should be object")
+	}
+	if len(taskConfig) != 2 {
+		t.Fatalf("foster task pool should have exactly 2 tasks, got %d: %v", len(taskConfig), taskConfig)
+	}
+	if _, exists := taskConfig["寄养"]; !exists {
+		t.Fatalf("foster task pool should contain 寄养")
+	}
+	if _, exists := taskConfig["放卡"]; !exists {
+		t.Fatalf("foster task pool should contain 放卡")
+	}
+	if _, exists := taskConfig["悬赏"]; exists {
+		t.Fatalf("foster task pool should not contain 悬赏")
+	}
+}
+
+func TestFosterUserCannotUpdateNonFosterTask(t *testing.T) {
+	srv, db := setupTestServer(t)
+	manager := createActiveManager(t, db, "manager_foster_guard", "passwordFosterGuard123")
+	managerToken := loginManagerToken(t, srv, manager.Username, "passwordFosterGuard123")
+
+	createCodeResp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodPost,
+		"/api/v1/manager/activation-codes",
+		map[string]any{
+			"duration_days": 30,
+			"user_type":     "foster",
+		},
+		managerToken,
+	)
+	if createCodeResp.Code != http.StatusCreated {
+		t.Fatalf("create foster activation code failed, status=%d body=%s", createCodeResp.Code, createCodeResp.Body.String())
+	}
+	code := decodeBodyMap(t, createCodeResp.Body.Bytes())["code"].(string)
+
+	registerResp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodPost,
+		"/api/v1/user/auth/register-by-code",
+		map[string]any{"code": code},
+		"",
+	)
+	if registerResp.Code != http.StatusCreated {
+		t.Fatalf("register by foster code failed, status=%d body=%s", registerResp.Code, registerResp.Body.String())
+	}
+	userToken := decodeBodyMap(t, registerResp.Body.Bytes())["token"].(string)
+
+	updateResp := doJSONRequest(
+		t,
+		srv.router,
+		http.MethodPut,
+		"/api/v1/user/me/tasks",
+		map[string]any{
+			"task_config": map[string]any{
+				"悬赏": map[string]any{
+					"enabled": true,
+				},
+			},
+		},
+		userToken,
+	)
+	if updateResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for disallowed task update, got %d body=%s", updateResp.Code, updateResp.Body.String())
+	}
+}
+
 func loginManagerToken(t *testing.T, srv *Server, username string, password string) string {
 	t.Helper()
 	resp := doJSONRequest(

@@ -115,34 +115,10 @@ var duiyiTaskOrder = []string{
 	"对弈竞猜",
 }
 
-// foster task pool: same as daily.
+// foster task pool: only fostering and card-placing tasks are allowed.
 var fosterTaskOrder = []string{
 	"寄养",
-	"悬赏",
-	"弥助",
-	"勾协",
-	"探索突破",
-	"结界卡合成",
 	"放卡",
-	"加好友",
-	"领取登录礼包",
-	"领取邮件",
-	"爬塔",
-	"逢魔",
-	"地鬼",
-	"道馆",
-	"寮商店",
-	"领取寮金币",
-	"每日一抽",
-	"每周商店",
-	"秘闻",
-	"签到",
-	"御魂",
-	"每周分享",
-	"召唤礼包",
-	"领取饭盒酒壶",
-	"斗技",
-	"对弈竞猜",
 }
 
 // jingzhi task pool: same as daily (组队御魂 is system-managed via TeamTab, not in config).
