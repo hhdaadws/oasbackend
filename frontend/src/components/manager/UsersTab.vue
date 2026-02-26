@@ -574,9 +574,9 @@ function doClearSelection() {
   }
 }
 
-function buildTaskRows(config) {
-  const tpl = currentTemplate.value;
-  taskRows.value = tpl.order.map((name) => {
+function buildTaskRows(config, tpl = null) {
+  const template = tpl !== null ? tpl : currentTemplate.value;
+  taskRows.value = template.order.map((name) => {
     const cfg = reactive(ensureTaskConfig(config[name]));
     return { name, config: cfg };
   });
@@ -703,7 +703,7 @@ async function loadSelectedUserTasks() {
       ...(template.defaultConfig || {}),
       ...(response.task_config || {}),
     };
-    buildTaskRows(merged);
+    buildTaskRows(merged, template);
     stringifyTaskConfig(merged);
   } catch (error) {
     ElMessage.error(parseApiError(error));
