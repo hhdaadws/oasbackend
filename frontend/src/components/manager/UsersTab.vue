@@ -224,10 +224,10 @@
               </el-radio-group>
             </div>
             <div class="data-table-wrapper">
-              <el-table :data="filteredTaskRows" border stripe empty-text="暂无任务模板" :row-class-name="tableRowClassName">
+              <el-table :data="filteredTaskRows" border stripe empty-text="暂无任务模板" :row-class-name="tableRowClassName" row-key="name" :expand-row-keys="expandedTaskRowNames" @expand-change="onTaskExpandChange">
                 <el-table-column type="expand">
                   <template #default="scope">
-                    <div v-if="isSpecialTask(scope.row.name)" class="expand-config">
+                    <div v-if="isSpecialTask(scope.row.name)" class="expand-config" @click.stop>
                       <!-- 探索突破 -->
                       <template v-if="scope.row.name === '探索突破'">
                         <div class="expand-row">
@@ -325,6 +325,29 @@
                         <div class="expand-row" style="margin-top: 8px;">
                           <el-checkbox v-model="scope.row.config.auto_accept_friend" @change="saveOneTask(scope.row)">自动同意好友申请</el-checkbox>
                           <el-checkbox v-model="scope.row.config.collect_fanhe" @change="saveOneTask(scope.row)">领取饭盒</el-checkbox>
+                        </div>
+                      </template>
+                      <!-- 放卡 -->
+                      <template v-else-if="scope.row.name === '放卡'">
+                        <div class="expand-row">
+                          <span class="expand-label">卡片类型:</span>
+                          <el-select v-model="scope.row.config.card_type" size="small" class="w-120" @change="saveOneTask(scope.row)">
+                            <el-option label="太鼓" value="taigu" />
+                            <el-option label="斗鱼" value="douyu" />
+                          </el-select>
+                          <span class="expand-label" style="margin-left: 16px;">星级:</span>
+                          <el-select v-model="scope.row.config.level_min" size="small" style="width: 80px" @change="saveOneTask(scope.row)">
+                            <el-option v-for="n in 6" :key="n" :label="n + 'x'" :value="n" />
+                          </el-select>
+                          <span style="margin: 0 4px;">~</span>
+                          <el-select v-model="scope.row.config.level_max" size="small" style="width: 80px" @change="saveOneTask(scope.row)">
+                            <el-option v-for="n in 6" :key="n" :label="n + 'x'" :value="n" />
+                          </el-select>
+                          <span class="expand-label" style="margin-left: 16px;">排序:</span>
+                          <el-select v-model="scope.row.config.sort_order" size="small" class="w-120" @change="saveOneTask(scope.row)">
+                            <el-option label="由高到低" value="high_to_low" />
+                            <el-option label="由低到高" value="low_to_high" />
+                          </el-select>
                         </div>
                       </template>
                     </div>
@@ -487,6 +510,7 @@ const userTableRef = ref(null);
 const selectedTaskConfigRaw = ref("{}");
 const taskRows = ref([]);
 const taskFilter = ref("");
+const expandedTaskRowNames = ref([]);
 
 const filteredTaskRows = computed(() => {
   if (taskFilter.value === "enabled") return taskRows.value.filter(r => r.config.enabled === true);
@@ -589,6 +613,9 @@ function isSpecialTask(name) {
 function tableRowClassName({ row }) {
   return isSpecialTask(row.name) ? '' : 'hide-expand';
 }
+function onTaskExpandChange(row, expandedRows) {
+  expandedTaskRowNames.value = expandedRows.map(r => r.name);
+}
 
 function stringifyTaskConfig(config) {
   selectedTaskConfigRaw.value = JSON.stringify(config || {}, null, 2);
@@ -688,6 +715,7 @@ async function selectUser(row) {
   lifecycleForm.archive_status = row.archive_status || "normal";
   detailCanViewLogs.value = !!row.can_view_logs;
   taskRows.value = [];
+  expandedTaskRowNames.value = [];
   selectedTaskConfigRaw.value = "{}";
   showUserDetailDialog.value = true;
   await props.ensureTaskTemplates(row.user_type || "daily", userTypeOptions);

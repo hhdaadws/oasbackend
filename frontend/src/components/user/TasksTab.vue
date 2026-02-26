@@ -18,6 +18,7 @@ const { templateCache, ensureTaskTemplates } = useTaskTemplates();
 
 const userType = ref("daily");
 const taskFilter = ref("");
+const expandedRowNames = ref([]);
 const lineupDialogVisible = ref(false);
 
 // Duiyi answer source
@@ -129,6 +130,9 @@ function isSpecialTask(name) {
 function tableRowClassName({ row }) {
   return isSpecialTask(row.name) ? '' : 'hide-expand';
 }
+function onExpandChange(row, expandedRows) {
+  expandedRowNames.value = expandedRows.map(r => r.name);
+}
 
 async function loadDuiyiSources() {
   if (!props.token || userType.value !== "duiyi") return;
@@ -174,7 +178,7 @@ async function saveDuiyiSource() {
       </div>
     </div>
     <div class="data-table-wrapper">
-      <el-table :data="filteredTaskRows" border stripe empty-text="暂无可配置任务" :row-class-name="tableRowClassName">
+      <el-table :data="filteredTaskRows" border stripe empty-text="暂无可配置任务" :row-class-name="tableRowClassName" row-key="name" :expand-row-keys="expandedRowNames" @expand-change="onExpandChange">
         <el-table-column type="expand">
           <template #default="scope">
             <div v-if="isSpecialTask(scope.row.name)" class="expand-config" @click.stop>
