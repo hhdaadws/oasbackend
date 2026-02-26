@@ -3221,6 +3221,74 @@ func (s *Server) syncAgentResult(jobID uint, result map[string]any, now time.Tim
 	if len(updates) > 1 {
 		_ = s.db.Model(&models.User{}).Where("id = ?", job.UserID).Updates(updates).Error
 	}
+
+	// Apply agent-reported task_next_times for on_demand tasks (e.g. 放卡)
+	if taskNextTimes, ok := result["task_next_times"].(map[string]any); ok && len(taskNextTimes) > 0 {
+		s.applyTaskNextTimes(job.UserID, taskNextTimes, now)
+	}
+}
+
+// applyTaskNextTimes applies agent-reported next_time values to UserTaskConfig.
+// Used for on_demand tasks where the executor determines the next execution time
+// (e.g., 放卡 sets next_time based on card duration via OCR).
+func (s *Server) applyTaskNextTimes(userID uint, taskNextTimes map[string]any, now time.Time) {
+	var cfg models.UserTaskConfig
+	if err := s.db.Where("user_id = ?", userID).First(&cfg).Error; err != nil {
+		return
+	}
+
+	taskConfig := map[string]any(cfg.TaskConfig)
+	if taskConfig == nil {
+		return
+	}
+
+	changed := false
+	for taskName, rawNextTime := range taskNextTimes {
+		nextTimeStr, ok := rawNextTime.(string)
+		if !ok || nextTimeStr == "" {
+			continue
+		}
+
+		// Only allow on_demand tasks to be updated by agent
+		rule := taskmeta.GetNextTimeRule(taskName)
+		if rule != "on_demand" {
+			continue
+		}
+
+		// Validate time format
+		parsed, err := time.ParseInLocation("2006-01-02 15:04", nextTimeStr, taskmeta.BJLoc)
+		if err != nil {
+			continue
+		}
+
+		// Only accept future times to prevent immediate re-scheduling
+		if !parsed.After(now) {
+			continue
+		}
+
+		rawTaskCfg, exists := taskConfig[taskName]
+		if !exists {
+			continue
+		}
+		taskMap, ok := rawTaskCfg.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		taskMap["next_time"] = nextTimeStr
+		taskConfig[taskName] = taskMap
+		changed = true
+	}
+
+	if changed {
+		_ = s.db.Model(&models.UserTaskConfig{}).
+			Where("id = ?", cfg.ID).
+			Updates(map[string]any{
+				"task_config": datatypes.JSONMap(taskConfig),
+				"updated_at":  now,
+				"version":     gorm.Expr("version + 1"),
+			}).Error
+	}
 }
 
 // notifyWorker consumes NotifyRequests from notifyCh and sends notifications.
@@ -4734,20 +4802,21 @@ func (s *Server) userSendFriendRequest(c *gin.Context) {
 		return
 	}
 
-	// Find the friend by account_no
-	var friend models.User
-	if err := s.db.Where("account_no = ?", req.FriendAccountNo).First(&friend).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "目标用户不存在"})
+	// Find the friend by username within same manager
+	var friendList []models.User
+	if err := s.db.Where("username = ? AND manager_id = ?", req.FriendUsername, user.ManagerID).Find(&friendList).Error; err != nil || len(friendList) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "用户名不存在"})
 		return
 	}
+	if len(friendList) > 1 {
+		c.JSON(http.StatusConflict, gin.H{"detail": "存在多个同名用户，请联系管理员确认账号"})
+		return
+	}
+	friend := friendList[0]
 
 	// Validation
 	if friend.ID == user.ID {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "不能添加自己为好友"})
-		return
-	}
-	if friend.ManagerID != user.ManagerID {
-		c.JSON(http.StatusForbidden, gin.H{"detail": "只能添加同一管理员下的用户为好友"})
 		return
 	}
 	if friend.UserType != models.UserTypeJingzhi {

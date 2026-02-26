@@ -267,6 +267,9 @@ Agent 登录（使用 Manager 凭据）。
     },
     "explore_progress": {
       "1": true, "2": true, "3": false
+    },
+    "task_next_times": {
+      "放卡": "2026-02-27 08:00"
     }
   }
 }
@@ -283,6 +286,7 @@ Agent 登录（使用 Manager 凭据）。
 | `current_task` | string | 当前执行中的任务（完成时通常为空） |
 | `assets` | object | **仅成功时包含**，账号资产快照 |
 | `explore_progress` | object | **仅成功时包含**，探索进度 `{"章节号": bool}` |
+| `task_next_times` | object | **仅成功时包含，可选**。`on_demand` 规则任务由执行器决定下次执行时间（如放卡根据卡片时长），格式 `{"任务名": "YYYY-MM-DD HH:MM"}`（北京时间）。后端仅接受 `on_demand` 规则任务的未来时间 |
 
 **通知行为：** 任务完成后，后端会异步检查该用户的 `notify_config`，若启用了微信通知（`wechat_enabled=true` 且 `wechat_miao_code` 非空），则通过喵提醒 API 向用户微信推送任务完成通知。
 
@@ -335,7 +339,8 @@ Agent 登录（使用 Manager 凭据）。
     "task_config": {
       "签到": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
       "探索突破": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_8h"},
-      "寄养": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_6h", "foster_priority": "gouyu", "custom_priority": ["6xtg","6xdy","5xtg","5xdy","4xtg","4xdy"]}
+      "寄养": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_6h", "foster_priority": "gouyu", "custom_priority": ["6xtg","6xdy","5xtg","5xdy","4xtg","4xdy"]},
+      "放卡": {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "on_demand", "card_type": "taigu", "level_min": 1, "level_max": 6, "sort_order": "high_to_low"}
     },
     "rest_config": {
       "enabled": true,
@@ -363,7 +368,7 @@ Agent 登录（使用 Manager 凭据）。
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | login_id | string | 用户的登录编号，对应本地 `putonglogindata/{login_id}/` 目录 |
-| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka` / `foster` / `jingzhi`。duiyi 用户的 task_config 仅含"对弈竞猜"；foster 任务池同 daily；jingzhi 任务池同 daily + "组队御魂" |
+| user_type | string | 用户类型：`daily` / `duiyi` / `shuaka` / `foster` / `jingzhi`。duiyi 用户的 task_config 仅含"对弈竞猜"（不含"放卡"等其他任务）；foster 任务池同 daily；jingzhi 任务池同 daily + "组队御魂" |
 | task_config | object | 按用户类型标准化后的任务配置 |
 
 **寄养任务专属字段：**
@@ -372,6 +377,30 @@ Agent 登录（使用 Manager 凭据）。
 |------|------|------|
 | `foster_priority` | string | 寄养优先级模式：`gouyu`(勾玉优先)、`tili`(体力优先)、`custom`(自定义) |
 | `custom_priority` | string[] | 自定义优先级排序，可选值：`6xtg`、`6xdy`、`5xtg`、`5xdy`、`4xtg`、`4xdy` |
+
+**放卡任务专属字段：**
+
+放卡任务存在于所有任务池中（daily、foster、jingzhi、shuaka），**duiyi 除外**。默认配置如下：
+
+```json
+{
+  "enabled": true,
+  "next_time": "2020-01-01 00:00",
+  "fail_delay": 30,
+  "next_time_rule": "on_demand",
+  "card_type": "taigu",
+  "level_min": 1,
+  "level_max": 6,
+  "sort_order": "high_to_low"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `card_type` | string | 卡片类型：`taigu`（太鼓）、`douyu`（斗鱼） |
+| `level_min` | int | 最低等级，取值 1-6 |
+| `level_max` | int | 最高等级，取值 1-6 |
+| `sort_order` | string | 排序方式：`high_to_low`（从高到低）、`low_to_high`（从低到高） |
 
 ---
 
@@ -711,6 +740,7 @@ pending → leased → running → success
 | `weekly_share` | 每周分享 |
 | `collect_fanhe_jiuhu` | 领取饭盒酒壶 |
 | `duiyi_jingcai` | 对弈竞猜 |
+| `fangka` | 放卡（所有任务池均包含，duiyi 除外） |
 | `team_yuhun` | 组队御魂（仅 jingzhi 用户，由组队预约到期后自动生成） |
 | `init` | 初始化 |
 | `init_collect_reward` | 初始化-领取奖励 |

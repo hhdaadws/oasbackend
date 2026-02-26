@@ -7,12 +7,12 @@ const props = defineProps({
   token: { type: String, default: "" },
 });
 
-const loading = reactive({ friends: false, requests: false, candidates: false, action: false });
+const loading = reactive({ friends: false, requests: false, action: false });
 
 const friends = ref([]);
 const friendRequests = ref([]);
-const candidates = ref([]);
 const showAddDialog = ref(false);
+const addUsername = ref("");
 
 async function loadFriends() {
   if (!props.token) return;
@@ -40,27 +40,20 @@ async function loadFriendRequests() {
   }
 }
 
-async function loadCandidates() {
-  loading.candidates = true;
-  try {
-    const res = await userApi.getFriendCandidates(props.token);
-    candidates.value = res.candidates || [];
-  } catch (error) {
-    ElMessage.error(parseApiError(error));
-  } finally {
-    loading.candidates = false;
-  }
-}
-
-async function openAddDialog() {
+function openAddDialog() {
+  addUsername.value = "";
   showAddDialog.value = true;
-  await loadCandidates();
 }
 
-async function sendRequest(candidate) {
+async function sendRequest() {
+  const name = addUsername.value.trim();
+  if (!name) {
+    ElMessage.warning("请输入用户名");
+    return;
+  }
   loading.action = true;
   try {
-    await userApi.sendFriendRequest(props.token, { friend_account_no: candidate.account_no });
+    await userApi.sendFriendRequest(props.token, { friend_username: name });
     ElMessage.success("好友请求已发送");
     showAddDialog.value = false;
     await Promise.all([loadFriends(), loadFriendRequests()]);
@@ -191,20 +184,14 @@ onMounted(async () => {
   </section>
 
   <el-dialog v-model="showAddDialog" title="添加好友" class="dialog-sm" append-to-body>
-    <div class="data-table-wrapper">
-      <el-table v-loading="loading.candidates" :data="candidates" border stripe empty-text="暂无可添加的好友">
-        <el-table-column prop="account_no" label="账号" min-width="180" />
-        <el-table-column prop="username" label="用户名" min-width="120" />
-        <el-table-column prop="server" label="服务器" min-width="120" />
-        <el-table-column label="操作" width="100">
-          <template #default="scope">
-            <el-button type="primary" plain size="small" :loading="loading.action" @click="sendRequest(scope.row)">添加</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
+    <el-form @submit.prevent="sendRequest">
+      <el-form-item label="用户名">
+        <el-input v-model="addUsername" placeholder="请输入好友的用户名" clearable @keyup.enter="sendRequest" />
+      </el-form-item>
+    </el-form>
     <template #footer>
-      <el-button @click="showAddDialog = false">关闭</el-button>
+      <el-button @click="showAddDialog = false">取消</el-button>
+      <el-button type="primary" :loading="loading.action" @click="sendRequest">发送请求</el-button>
     </template>
   </el-dialog>
 </template>

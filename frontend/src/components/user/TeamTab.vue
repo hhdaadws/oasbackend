@@ -37,7 +37,7 @@ async function loadLineup() {
   loading.lineup = true;
   try {
     const res = await userApi.getMeLineup(props.token);
-    const data = res.lineup || {};
+    const data = res.lineup_config || {};
     const driver = data["组队御魂_司机"] || {};
     const attacker = data["组队御魂_打手"] || {};
     driverLineup.group = driver.group || 0;
@@ -55,7 +55,7 @@ async function saveLineup() {
   loading.lineup = true;
   try {
     await userApi.putMeLineup(props.token, {
-      lineup: {
+      lineup_config: {
         "组队御魂_司机": { group: driverLineup.group, position: driverLineup.position },
         "组队御魂_打手": { group: attackerLineup.group, position: attackerLineup.position },
       },

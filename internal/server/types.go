@@ -217,7 +217,7 @@ type putDuiyiAnswerSourceRequest struct {
 // ── Friend request types ───────────────────────────────
 
 type userFriendRequest struct {
-	FriendAccountNo string `json:"friend_account_no" binding:"required,min=6,max=64"`
+	FriendUsername string `json:"friend_username" binding:"required,min=1,max=128"`
 }
 
 // ── Team Yuhun request types ───────────────────────────

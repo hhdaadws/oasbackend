@@ -322,6 +322,10 @@
                             <el-option v-for="r in FOSTER_REWARD_OPTIONS" :key="r.value" :label="r.label" :value="r.value" />
                           </el-select>
                         </div>
+                        <div class="expand-row" style="margin-top: 8px;">
+                          <el-checkbox v-model="scope.row.config.auto_accept_friend" @change="saveOneTask(scope.row)">自动同意好友申请</el-checkbox>
+                          <el-checkbox v-model="scope.row.config.collect_fanhe" @change="saveOneTask(scope.row)">领取饭盒</el-checkbox>
+                        </div>
                       </template>
                     </div>
                   </template>
