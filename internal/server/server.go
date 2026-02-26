@@ -3734,24 +3734,34 @@ func (s *Server) mergeTaskConfig(userID uint, patch map[string]any) (*models.Use
 
 		base := taskmeta.NormalizeTaskConfigByType(map[string]any(cfg.TaskConfig), userType)
 
-		// Snapshot old next_time values before merge
+		// Snapshot old next_time and enabled values before merge
 		oldNextTimes := make(map[string]string)
+		oldEnabled := make(map[string]bool)
 		for taskType, rawCfg := range base {
 			if taskMap, ok := rawCfg.(map[string]any); ok {
 				if nt, ok := taskMap["next_time"].(string); ok {
 					oldNextTimes[taskType] = nt
+				}
+				if en, ok := taskMap["enabled"].(bool); ok {
+					oldEnabled[taskType] = en
 				}
 			}
 		}
 
 		merged := deepMergeMap(base, filteredPatch)
 
-		// Detect next_time changes and expire stale pending tasks
+		// Detect next_time or enabled changes and expire stale pending tasks
 		var changedTaskTypes []string
 		for taskType, rawCfg := range merged {
 			if taskMap, ok := rawCfg.(map[string]any); ok {
 				newNT, _ := taskMap["next_time"].(string)
 				if newNT != oldNextTimes[taskType] {
+					changedTaskTypes = append(changedTaskTypes, taskType)
+					continue
+				}
+				// enabled 从 true → false 时也清除 pending 任务
+				newEnabled, _ := taskMap["enabled"].(bool)
+				if oldEnabled[taskType] && !newEnabled {
 					changedTaskTypes = append(changedTaskTypes, taskType)
 				}
 			}
@@ -3773,7 +3783,7 @@ func (s *Server) mergeTaskConfig(userID uint, patch map[string]any) (*models.Use
 					events = append(events, models.TaskJobEvent{
 						JobID:     id,
 						EventType: "expired",
-						Message:   "任务时间已变更，自动失败",
+						Message:   "任务配置已变更，自动失败",
 						EventAt:   now,
 					})
 				}

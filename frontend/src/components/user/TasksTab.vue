@@ -287,7 +287,7 @@ async function saveDuiyiSource() {
                     placeholder="选择并排序奖励优先级"
                     size="small"
                     style="width: 320px"
-                    @change="saveOneTask(scope.row)"
+                    @visible-change="(visible) => { if (!visible) saveOneTask(scope.row) }"
                   >
                     <el-option v-for="r in FOSTER_REWARD_OPTIONS" :key="r.value" :label="r.label" :value="r.value" />
                   </el-select>
