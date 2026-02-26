@@ -112,6 +112,13 @@ func (g *Generator) runOnce(ctx context.Context) {
 		slog.Info("expired stale duiyi jobs", "count", expired)
 	}
 
+	// Reset expired job leases (leased/running jobs whose lease has timed out)
+	if reset, err := g.resetAllExpiredJobLeases(now); err != nil {
+		slog.Warn("reset expired job leases failed", "error", err)
+	} else if reset > 0 {
+		slog.Info("reset expired job leases", "count", reset)
+	}
+
 	// Rest window: skip generation during Beijing time 00:00–05:59
 	bjLoc := time.FixedZone("Asia/Shanghai", 8*60*60)
 	bjHour := now.In(bjLoc).Hour()
@@ -556,6 +563,60 @@ func duiyiWindowStartForTime(bjTime time.Time) time.Time {
 		windowHour = 10
 	}
 	return time.Date(bjTime.Year(), bjTime.Month(), bjTime.Day(), windowHour, 0, 0, 0, taskmeta.BJLoc)
+}
+
+// resetAllExpiredJobLeases resets leased/running jobs whose lease has expired
+// back to pending status. This runs periodically in the scheduler to ensure
+// jobs are not stuck in running state when an agent crashes or disconnects.
+func (g *Generator) resetAllExpiredJobLeases(now time.Time) (int64, error) {
+	var expiredJobs []models.TaskJob
+	if err := g.db.Where("status IN ? AND lease_until IS NOT NULL AND lease_until < ?",
+		[]string{models.JobStatusLeased, models.JobStatusRunning}, now).
+		Find(&expiredJobs).Error; err != nil {
+		return 0, err
+	}
+	if len(expiredJobs) == 0 {
+		return 0, nil
+	}
+
+	expiredIDs := make([]uint, 0, len(expiredJobs))
+	for _, job := range expiredJobs {
+		expiredIDs = append(expiredIDs, job.ID)
+	}
+
+	if err := g.db.Model(&models.TaskJob{}).
+		Where("id IN ?", expiredIDs).
+		Updates(map[string]any{
+			"status":         models.JobStatusPending,
+			"leased_by_node": "",
+			"lease_until":    nil,
+			"updated_at":     now,
+			"attempts":       gorm.Expr("attempts + 1"),
+		}).Error; err != nil {
+		return 0, err
+	}
+
+	// Record lease_expired events for audit trail
+	events := make([]models.TaskJobEvent, 0, len(expiredIDs))
+	for _, id := range expiredIDs {
+		events = append(events, models.TaskJobEvent{
+			JobID:     id,
+			EventType: "lease_expired",
+			Message:   "租约超时，自动重置为待执行",
+			EventAt:   now,
+		})
+	}
+	if len(events) > 0 {
+		_ = g.db.Create(&events).Error
+	}
+
+	// Clear Redis leases
+	ctx := context.Background()
+	for _, job := range expiredJobs {
+		_ = g.store.ClearJobLease(ctx, job.ManagerID, job.ID)
+	}
+
+	return int64(len(expiredIDs)), nil
 }
 
 // expireStaleDuiyiJobs expires pending/leased/running 对弈竞猜 tasks whose

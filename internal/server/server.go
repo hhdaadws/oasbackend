@@ -3013,6 +3013,19 @@ func (s *Server) resetExpiredJobLeases(ctx context.Context, managerID uint, now 
 	for _, id := range expiredIDs {
 		_ = s.redisStore.ClearJobLease(ctx, managerID, id)
 	}
+	// Record lease_expired events for audit trail
+	events := make([]models.TaskJobEvent, 0, len(expiredIDs))
+	for _, id := range expiredIDs {
+		events = append(events, models.TaskJobEvent{
+			JobID:     id,
+			EventType: "lease_expired",
+			Message:   "租约超时，自动重置为待执行",
+			EventAt:   now,
+		})
+	}
+	if len(events) > 0 {
+		_ = s.db.Create(&events).Error
+	}
 }
 
 func (s *Server) agentJobStart(c *gin.Context) {
