@@ -3686,7 +3686,19 @@ func (s *Server) getOrCreateTaskConfig(userID uint) (*models.UserTaskConfig, err
 		return nil, err
 	}
 	normalized := taskmeta.NormalizeTaskConfigByType(map[string]any(cfg.TaskConfig), userType)
-	cfg.TaskConfig = datatypes.JSONMap(normalized)
+	// 如果归一化后的任务数与数据库中不同，说明有多余任务，写回 DB 清理脏数据
+	if len(normalized) != len(cfg.TaskConfig) {
+		cfg.TaskConfig = datatypes.JSONMap(normalized)
+		cfg.Version = cfg.Version + 1
+		cfg.UpdatedAt = time.Now().UTC()
+		_ = s.db.Model(&models.UserTaskConfig{}).Where("id = ?", cfg.ID).Updates(map[string]any{
+			"task_config": cfg.TaskConfig,
+			"updated_at":  cfg.UpdatedAt,
+			"version":     cfg.Version,
+		}).Error
+	} else {
+		cfg.TaskConfig = datatypes.JSONMap(normalized)
+	}
 	return &cfg, nil
 }
 

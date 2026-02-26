@@ -687,6 +687,8 @@ async function selectUser(row) {
   lifecycleForm.extend_days = 0;
   lifecycleForm.archive_status = row.archive_status || "normal";
   detailCanViewLogs.value = !!row.can_view_logs;
+  taskRows.value = [];
+  selectedTaskConfigRaw.value = "{}";
   showUserDetailDialog.value = true;
   await props.ensureTaskTemplates(row.user_type || "daily", userTypeOptions);
   await Promise.all([loadSelectedUserTasks(), loadSelectedUserAssets()]);
@@ -704,7 +706,13 @@ async function loadSelectedUserTasks() {
       ...(response.task_config || {}),
     };
     buildTaskRows(merged, template);
-    stringifyTaskConfig(merged);
+    // 只保留 template.order 中的任务用于 JSON 显示，过滤掉不属于该用户类型的任务
+    const allowedSet = new Set(template.order);
+    const filtered = {};
+    for (const key of Object.keys(merged)) {
+      if (allowedSet.has(key)) filtered[key] = merged[key];
+    }
+    stringifyTaskConfig(filtered);
   } catch (error) {
     ElMessage.error(parseApiError(error));
   } finally {
