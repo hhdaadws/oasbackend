@@ -3862,6 +3862,9 @@ func generateChineseDescription(eventType, message, errorCode, leasedByNode stri
 	case "start":
 		return "开始执行"
 	case "success":
+		if message != "" {
+			return "执行成功：" + message
+		}
 		return "执行成功"
 	case "fail":
 		desc := "执行失败"
