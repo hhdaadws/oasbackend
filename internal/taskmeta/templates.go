@@ -257,7 +257,15 @@ func BuildDefaultTaskConfig() map[string]any {
 }
 
 func BuildDefaultTaskConfigByType(userType string) map[string]any {
-	return buildDefaultTaskConfigByOrder(UserTypeTaskOrder(userType))
+	config := buildDefaultTaskConfigByOrder(UserTypeTaskOrder(userType))
+	if userType == "foster" {
+		if fk, ok := config["放卡"]; ok {
+			if fkMap, ok := fk.(map[string]any); ok {
+				fkMap["enabled"] = false
+			}
+		}
+	}
+	return config
 }
 
 func BuildDefaultUserAssets() map[string]any {
