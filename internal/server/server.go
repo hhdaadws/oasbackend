@@ -3242,8 +3242,8 @@ func (s *Server) syncAgentResult(jobID uint, result map[string]any, now time.Tim
 }
 
 // applyTaskNextTimes applies agent-reported next_time values to UserTaskConfig.
-// Used for on_demand tasks where the executor determines the next execution time
-// (e.g., 放卡 sets next_time based on card duration via OCR).
+// Used for tasks where the executor determines a more accurate next execution time
+// (e.g., 放卡 card duration via OCR, 寄养 remaining foster time via OCR).
 func (s *Server) applyTaskNextTimes(userID uint, taskNextTimes map[string]any, now time.Time) {
 	var cfg models.UserTaskConfig
 	if err := s.db.Where("user_id = ?", userID).First(&cfg).Error; err != nil {
@@ -3262,9 +3262,8 @@ func (s *Server) applyTaskNextTimes(userID uint, taskNextTimes map[string]any, n
 			continue
 		}
 
-		// Only allow on_demand tasks to be updated by agent
-		rule := taskmeta.GetNextTimeRule(taskName)
-		if rule != "on_demand" {
+		// Only allow agent-overridable tasks to be updated
+		if !taskmeta.IsAgentNextTimeAllowed(taskName) {
 			continue
 		}
 

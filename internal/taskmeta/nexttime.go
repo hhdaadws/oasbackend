@@ -82,3 +82,17 @@ func CalcNextTime(rule string, now time.Time) time.Time {
 		return time.Time{}
 	}
 }
+
+// agentOverridableRules lists next_time_rule values where the agent-reported
+// next_time should take precedence over the server-calculated value.
+var agentOverridableRules = map[string]bool{
+	"on_demand":   true,
+	"interval_6h": true,
+}
+
+// IsAgentNextTimeAllowed returns true if the given task allows the agent
+// to override the next_time value (via task_next_times in result).
+func IsAgentNextTimeAllowed(taskName string) bool {
+	rule := GetNextTimeRule(taskName)
+	return agentOverridableRules[rule]
+}
