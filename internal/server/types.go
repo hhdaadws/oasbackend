@@ -35,6 +35,7 @@ type createActivationCodeRequest struct {
 type quickCreateUserRequest struct {
 	DurationDays int    `json:"duration_days" binding:"required,min=1,max=3650"`
 	UserType     string `json:"user_type" binding:"required,oneof=daily duiyi shuaka foster jingzhi"`
+	LoginID      string `json:"login_id" binding:"omitempty,numeric,max=20"`
 }
 
 type putTaskConfigRequest struct {

@@ -721,11 +721,12 @@ Manager 使用续费密钥续期。
 ```json
 {
   "duration_days": 30,
-  "user_type": "daily"
+  "user_type": "daily",
+  "login_id": "42"          // 可选，指定登录ID（纯数字字符串）；不传则自动递增分配
 }
 ```
 
-**说明：** 与激活码创建相同，`daily` 管理员可选择 `daily`/`foster`/`jingzhi`，`shuaka` 和 `duiyi` 管理员的 `user_type` 会被强制设为自身类型，`all` 类型管理员可自由选择。
+**说明：** 与激活码创建相同，`daily` 管理员可选择 `daily`/`foster`/`jingzhi`，`shuaka` 和 `duiyi` 管理员的 `user_type` 会被强制设为自身类型，`all` 类型管理员可自由选择。若指定 `login_id` 且该管理员下已存在相同值，返回 400。
 
 **响应 201：**
 ```json

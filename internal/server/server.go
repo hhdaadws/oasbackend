@@ -1389,6 +1389,19 @@ func (s *Server) managerQuickCreateUser(c *gin.Context) {
 
 	var createdUser models.User
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 如果指定了 login_id，先检查唯一性
+		if req.LoginID != "" {
+			var count int64
+			if err := tx.Model(&models.User{}).
+				Where("manager_id = ? AND login_id = ?", managerID, req.LoginID).
+				Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return fmt.Errorf("login_id_taken")
+			}
+		}
+
 		code, err := auth.GenerateOpaqueToken("uac", 12)
 		if err != nil {
 			return err
@@ -1408,10 +1421,21 @@ func (s *Server) managerQuickCreateUser(c *gin.Context) {
 		if err != nil {
 			return err
 		}
+		// 如果指定了 login_id，覆盖自动生成的
+		if req.LoginID != "" {
+			if err := tx.Model(user).Update("login_id", req.LoginID).Error; err != nil {
+				return err
+			}
+			user.LoginID = req.LoginID
+		}
 		createdUser = *user
 		return nil
 	})
 	if err != nil {
+		if err.Error() == "login_id_taken" {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "该登录ID已被使用"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "快速创建用户失败"})
 		return
 	}

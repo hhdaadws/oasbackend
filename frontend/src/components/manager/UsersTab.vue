@@ -129,7 +129,7 @@
     </section>
 
     <!-- Quick Create Dialog -->
-    <el-dialog v-model="showQuickCreateDialog" title="创建下属账号" class="dialog-sm" append-to-body @close="createdAccounts.value = []">
+    <el-dialog v-model="showQuickCreateDialog" title="创建下属账号" class="dialog-sm" append-to-body @close="createdAccounts.value = []; quickForm.login_id = ''">
       <el-form :model="quickForm" label-width="100px">
         <el-form-item label="建号天数">
           <el-input-number v-model="quickForm.duration_days" :min="1" :max="3650" class="w-full" />
@@ -139,8 +139,12 @@
             <el-option v-for="item in userTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
+        <el-form-item label="指定登录ID">
+          <el-input v-model="quickForm.login_id" placeholder="留空则自动分配" class="w-full"
+            @input="val => { quickForm.login_id = val.replace(/\D/g, ''); if (quickForm.login_id) quickForm.count = 1; }" />
+        </el-form-item>
         <el-form-item label="数量">
-          <el-input-number v-model="quickForm.count" :min="1" :max="20" class="w-full" />
+          <el-input-number v-model="quickForm.count" :min="1" :max="20" class="w-full" :disabled="!!quickForm.login_id" />
         </el-form-item>
       </el-form>
       <template v-if="createdAccounts.length > 0">
@@ -500,7 +504,7 @@ const loading = reactive({
   batchDelete: false,
 });
 
-const quickForm = reactive({ duration_days: 30, user_type: "daily", count: 1 });
+const quickForm = reactive({ duration_days: 30, user_type: "daily", count: 1, login_id: "" });
 const filters = reactive({ keyword: "", status: "", userType: "" });
 const quickCreatedAccount = ref("");
 const quickCreatedUserType = ref("daily");
@@ -649,12 +653,14 @@ async function quickCreateUser() {
   loading.quickCreate = true;
   createdAccounts.value = [];
   try {
-    const total = Math.max(1, Math.min(20, quickForm.count || 1));
+    const total = quickForm.login_id ? 1 : Math.max(1, Math.min(20, quickForm.count || 1));
     for (let i = 0; i < total; i++) {
-      const response = await managerApi.quickCreateUser(props.token, {
+      const payload = {
         duration_days: quickForm.duration_days,
         user_type: quickForm.user_type,
-      });
+      };
+      if (quickForm.login_id) payload.login_id = quickForm.login_id;
+      const response = await managerApi.quickCreateUser(props.token, payload);
       createdAccounts.value.push({ account_no: response.account_no || "", login_id: response.login_id || "", user_type: response.user_type || quickForm.user_type });
     }
     quickCreatedAccount.value = createdAccounts.value[0]?.account_no || "";
