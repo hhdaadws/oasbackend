@@ -318,7 +318,14 @@ func (g *Generator) processUser(ctx context.Context, user models.User, cfg model
 			}
 		}
 
-		due, slot, dedupeTTL, nextTime := g.evaluateDue(taskMap, now)
+		due, slot, dedupeTTL, nextTime, fallbackDueToInvalidNextTime := g.evaluateDue(taskType, taskMap, now)
+		if fallbackDueToInvalidNextTime {
+			slog.Warn("scheduler fallback due to invalid next_time",
+				"user_id", user.ID,
+				"task_type", taskType,
+				"next_time", strings.TrimSpace(toString(taskMap["next_time"])),
+			)
+		}
 		if !due {
 			continue
 		}
@@ -423,7 +430,7 @@ func (g *Generator) createJobIfNeeded(user models.User, taskType string, taskMap
 	return true, nil
 }
 
-func (g *Generator) evaluateDue(task map[string]any, now time.Time) (bool, string, time.Duration, time.Time) {
+func (g *Generator) evaluateDue(taskType string, task map[string]any, now time.Time) (bool, string, time.Duration, time.Time, bool) {
 	slotTTL := g.cfg.SchedulerSlotTTL
 	if slotTTL < 10*time.Second {
 		slotTTL = 90 * time.Second
@@ -438,24 +445,36 @@ func (g *Generator) evaluateDue(task map[string]any, now time.Time) (bool, strin
 			// HH:MM 视为北京时间每日任务
 			target := time.Date(bjNow.Year(), bjNow.Month(), bjNow.Day(), hhmm.hour, hhmm.minute, 0, 0, taskmeta.BJLoc)
 			if now.Before(target) {
-				return false, "", slotTTL, nextRun
+				return false, "", slotTTL, nextRun, false
 			}
 			slot := fmt.Sprintf("daily:%s:%02d%02d", bjNow.Format("20060102"), hhmm.hour, hhmm.minute)
 			nextRun = target.Add(24 * time.Hour)
-			return true, slot, 26 * time.Hour, nextRun
+			return true, slot, 26 * time.Hour, nextRun, false
 		}
 
 		// YYYY-MM-DD HH:MM 视为北京时间（parseDateTime 已用 BJLoc 解析）
 		parsed := parseDateTime(nextRaw)
-		if parsed.IsZero() || now.Before(parsed) {
-			return false, "", slotTTL, nextRun
+		if parsed.IsZero() {
+			// 放卡任务在历史脏配置（next_time 格式异常）下不能长期饿死，兜底为可调度。
+			if taskType == "放卡" {
+				failDelayMinutes := toInt(task["fail_delay"], 0)
+				if failDelayMinutes > 0 {
+					nextRun = now.Add(time.Duration(failDelayMinutes) * time.Minute)
+				}
+				slot := "rolling:" + bjNow.Truncate(time.Minute).Format("200601021504")
+				return true, slot, slotTTL, nextRun, true
+			}
+			return false, "", slotTTL, nextRun, false
+		}
+		if now.Before(parsed) {
+			return false, "", slotTTL, nextRun, false
 		}
 		failDelayMinutes := toInt(task["fail_delay"], 0)
 		if failDelayMinutes > 0 {
 			nextRun = now.Add(time.Duration(failDelayMinutes) * time.Minute)
 		}
 		slot := "datetime:" + parsed.In(taskmeta.BJLoc).Format("200601021504")
-		return true, slot, 24 * time.Hour, nextRun
+		return true, slot, 24 * time.Hour, nextRun, false
 	}
 
 	slot := "rolling:" + bjNow.Truncate(time.Minute).Format("200601021504")
@@ -463,7 +482,7 @@ func (g *Generator) evaluateDue(task map[string]any, now time.Time) (bool, strin
 	if failDelayMinutes > 0 {
 		nextRun = now.Add(time.Duration(failDelayMinutes) * time.Minute)
 	}
-	return true, slot, slotTTL, nextRun
+	return true, slot, slotTTL, nextRun, false
 }
 
 func (g *Generator) updateStats(now time.Time, generated int, scanned int, err error) {
@@ -526,8 +545,10 @@ func parseHHMM(value string) (hhmmValue, bool) {
 func parseDateTime(value string) time.Time {
 	layouts := []string{
 		"2006-01-02 15:04",
+		"2006-01-02T15:04",
 		time.RFC3339,
 		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
 	}
 	for _, layout := range layouts {
 		parsed, err := time.ParseInLocation(layout, value, taskmeta.BJLoc)
@@ -536,6 +557,11 @@ func parseDateTime(value string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func toString(value any) string {
+	typed, _ := value.(string)
+	return typed
 }
 
 // ── Duiyi (对弈竞猜) window helpers ─────────────────────
@@ -730,12 +756,12 @@ func (g *Generator) generateTeamYuhunJobs(ctx context.Context, now time.Time) (i
 
 		// Create job for requester
 		requesterPayload := datatypes.JSONMap{
-			"user_id":           req.RequesterID,
-			"source":            "team_yuhun",
-			"team_request_id":   req.ID,
-			"role":              req.RequesterRole,
-			"partner_user_id":   req.ReceiverID,
-			"lineup":            map[string]any(req.RequesterLineup),
+			"user_id":         req.RequesterID,
+			"source":          "team_yuhun",
+			"team_request_id": req.ID,
+			"role":            req.RequesterRole,
+			"partner_user_id": req.ReceiverID,
+			"lineup":          map[string]any(req.RequesterLineup),
 		}
 		requesterJob := models.TaskJob{
 			ManagerID:   req.ManagerID,
@@ -752,12 +778,12 @@ func (g *Generator) generateTeamYuhunJobs(ctx context.Context, now time.Time) (i
 
 		// Create job for receiver
 		receiverPayload := datatypes.JSONMap{
-			"user_id":           req.ReceiverID,
-			"source":            "team_yuhun",
-			"team_request_id":   req.ID,
-			"role":              req.ReceiverRole,
-			"partner_user_id":   req.RequesterID,
-			"lineup":            map[string]any(req.ReceiverLineup),
+			"user_id":         req.ReceiverID,
+			"source":          "team_yuhun",
+			"team_request_id": req.ID,
+			"role":            req.ReceiverRole,
+			"partner_user_id": req.RequesterID,
+			"lineup":          map[string]any(req.ReceiverLineup),
 		}
 		receiverJob := models.TaskJob{
 			ManagerID:   req.ManagerID,
