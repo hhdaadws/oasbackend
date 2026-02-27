@@ -323,6 +323,13 @@ func (g *Generator) processUser(ctx context.Context, user models.User, cfg model
 			continue
 		}
 
+		// Skip slot acquisition if there's already an active job for this task,
+		// to avoid consuming the dedup slot without creating a job (which would
+		// block rescheduling for the slot TTL duration, up to 24h).
+		if activeJobCounts != nil && activeJobCounts[taskType] > 0 {
+			continue
+		}
+
 		acquired, err := g.store.AcquireScheduleSlot(
 			ctx,
 			user.ManagerID,
