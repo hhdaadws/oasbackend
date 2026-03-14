@@ -152,7 +152,7 @@ var jingzhiTaskOrder = []string{
 }
 
 var defaultTaskConfig = map[string]map[string]any{
-	"寄养":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_6h", "foster_priority": "gouyu", "custom_priority": []any{"6xtg", "6xdy", "5xtg", "5xdy", "4xtg", "4xdy"}, "auto_accept_friend": false, "collect_fanhe": false},
+	"寄养":      {"enabled": true, "priority": 111, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "interval_6h", "foster_priority": "gouyu", "custom_priority": []any{"6xtg", "6xdy", "5xtg", "5xdy", "4xtg", "4xdy"}, "auto_accept_friend": false, "collect_fanhe": false},
 	"悬赏":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
 	"弥助":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
 	"勾协":      {"enabled": true, "next_time": "2020-01-01 00:00", "fail_delay": 30, "next_time_rule": "daily_reset"},
